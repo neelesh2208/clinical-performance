@@ -1,7 +1,6 @@
-DB_CONFIG = {
-    "host": "77.37.44.94",
-    "database": "emoneeds_prod_v1",
-    "user": "neelesh",
-    "password": "Neelesh#@5444",
-    "port": "5432"
-}
+import os
+DB_HOST = os.environ.get("DB_HOST")
+DB_NAME = os.environ.get("DB_NAME")
+DB_USER = os.environ.get("DB_USER")
+DB_PASSWORD = os.environ.get("DB_PASSWORD")
+DB_PORT = os.environ.get("DB_PORT", "5432")
