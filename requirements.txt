@@ -1,0 +1,8 @@
+pandas
+sqlalchemy
+psycopg2-binary
+gspread
+oauth2client
+gspread-dataframe
+openpyxl
+python-dotenv

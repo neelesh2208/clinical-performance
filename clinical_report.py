@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+import os, json
 import pandas as pd
 from sqlalchemy import create_engine, text
 from urllib.parse import quote_plus
@@ -60,7 +63,14 @@ scope = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+# GitHub Actions pe GCP_CREDENTIALS secret se, local pe credentials.json file se
+raw = os.environ.get("GCP_CREDENTIALS")
+if raw:
+    info = json.loads(raw)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scope)
+else:
+    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+
 client = gspread.authorize(creds)
 
 sheet = client.open_by_key("1MEXTTUZCkN0OH6aXa36FSqtDmL73LWvf3Aj5Cx-y450")
