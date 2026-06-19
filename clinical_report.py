@@ -503,7 +503,7 @@ GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
 # abhi test ke liye apne aap ko; baad me list me aur emails add karo
-RECIPIENTS = [neeleshdwivedirgpv@gmail.com,neelesh@emoneeds.com]
+RECIPIENTS = [neeleshdwivedirgpv@gmail.com]
 
 def df_to_html(df, title, reverse_cols={"Inactive Client"}):
     """DataFrame ko styled HTML table banao, green/red highlight ke saath."""
