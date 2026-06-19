@@ -542,7 +542,7 @@ _y_str = yesterday.strftime("%d-%m-%Y")
 _m_str = _m_start.strftime("%d-%m-%Y")
 html_body = f'''
 <html><body>
-<p style="font-family:Arial;font-size:13px;">Dear Team,<br><br>
+<p style="font-family:Arial;font-size:13px;">Dear Tanmay,<br><br>
 Please find below the Clinical Performance report for your review.<br><br>
 The report covers two views &mdash; <b>Yesterday's Performance</b> (therapist-wise activity for the previous day) and <b>Month-to-Date (MTD) Performance</b> (cumulative from the 1st of the month up to yesterday). Metrics include OPD (New/Follow-up), RPP suggestions, conversions, sessions conducted, and active/inactive clients.<br><br>
 For quick reference, the highest performer in each metric is highlighted in green and the lowest in red.</p>
