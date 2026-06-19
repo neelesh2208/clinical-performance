@@ -29,8 +29,6 @@ engine = create_engine(
 )
 print("Database Connected ✅")
 
-# Har query ka tab-naam aur SQL ek jagah.
-# Nayi query add karni ho to queries.py mein constant banao aur yahan ek line jodo.
 REPORTS = [
     {"tab": "Active_Patients",   "query": ACTIVE_QUERY},
     {"tab": "Inactive_Patients", "query": INACTIVE_QUERY},
@@ -39,7 +37,6 @@ REPORTS = [
     {"tab": "Session_Data",      "query": SESSION_QUERY},
 ]
 
-# STEP 1: Pehle saari queries run karo aur df store karo
 for r in REPORTS:
     print(f"Running {r['tab']}...")
     with engine.connect() as conn:
@@ -63,7 +60,6 @@ scope = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# GitHub Actions pe GCP_CREDENTIALS secret se, local pe credentials.json file se
 raw = os.environ.get("GCP_CREDENTIALS")
 if raw:
     info = json.loads(raw)
@@ -83,7 +79,6 @@ def replace_worksheet(sheet, title, df):
     except gspread.exceptions.WorksheetNotFound:
         pass
 
-    # Size data ke hisaab se — fixed 50000 nahi, isliye cell-limit cross nahi hoga
     n_rows = len(df) + 10
     n_cols = len(df.columns) + 2
 
@@ -92,7 +87,6 @@ def replace_worksheet(sheet, title, df):
     print(f"'{title}' updated ✅ ({len(df)} rows)")
 
 
-# STEP 2: Ab har report apne tab mein
 for r in REPORTS:
     replace_worksheet(sheet, r["tab"], r["df"])
 
@@ -129,7 +123,6 @@ def norm_name(x):
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
-# name_map: tech_name -> final_name (sirf psychologist/psychiatrist pe)
 _nm = pd.read_csv("name_map.csv", dtype=str, keep_default_na=False)
 _nm["tech_name"] = _nm["tech_name"].astype(str).str.strip()
 _nm["final_name"] = _nm["final_name"].astype(str).str.strip()
@@ -170,7 +163,6 @@ sess_grp = sess_y.groupby("therapist")["total_sessions"].sum().reset_index()
 sess_grp.columns = ["therapist", "sessions_done"]
 
 # C. Convergation (FINAL) — kal ki NEW OPD + usi patient ka plan KAL hi bana
-#    Match: patient_ref_id | Therapist: OPD wala (assigned_to_name)
 opd_df["opd_date"] = pd.to_datetime(opd_df["opd_date"], errors="coerce").dt.date
 opd_new_y = opd_df[
     (opd_df["opd_status"] == "NEW OPD")
@@ -192,6 +184,7 @@ opd_new_y["converted"] = opd_new_y["patient_ref_id"].isin(converted_patients)
 conv_rows = opd_new_y[opd_new_y["converted"]].copy()
 conv_rows = conv_rows.drop_duplicates(subset=["patient_ref_id", "therapist"])
 conv_grp = conv_rows.groupby("therapist").size().reset_index(name="convergation")
+
 # D. Active count — current month (psychologist + psychiatrist)
 active_df["active_month_dt"] = pd.to_datetime(active_df["active_month"], format="%b-%y", errors="coerce")
 cur = pd.Timestamp(month_start)
@@ -260,15 +253,12 @@ GRID    = {"red":0.55,"green":0.55,"blue":0.55}
 
 requests = []
 
-# 1) Title row insert
 requests.append({"insertDimension": {
     "range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": 0, "endIndex": 1},
     "inheritFromBefore": False}})
-# 2) Title merge
 requests.append({"mergeCells": {
     "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
               "startColumnIndex": 0, "endColumnIndex": n_cols}, "mergeType": "MERGE_ALL"}})
-# 3) Title text + style
 title_text = f"Yesterday({yesterday.strftime('%d-%m-%Y')}) Clinical Performance"
 requests.append({"updateCells": {
     "rows": [{"values": [{
@@ -282,7 +272,6 @@ requests.append({"updateCells": {
 HDR_ROW = 1
 DATA_START = 2
 
-# 4) Header style
 requests.append({"repeatCell": {
     "range": {"sheetId": sheet_id, "startRowIndex": HDR_ROW, "endRowIndex": HDR_ROW+1,
               "startColumnIndex": 0, "endColumnIndex": n_cols},
@@ -291,7 +280,6 @@ requests.append({"repeatCell": {
         "wrapStrategy": "WRAP"}},
     "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat,wrapStrategy)"}})
 
-# 5) Data align
 requests.append({"repeatCell": {
     "range": {"sheetId": sheet_id, "startRowIndex": DATA_START, "endRowIndex": DATA_START+n_rows,
               "startColumnIndex": 1, "endColumnIndex": n_cols},
@@ -303,7 +291,6 @@ requests.append({"repeatCell": {
     "cell": {"userEnteredFormat": {"horizontalAlignment": "LEFT", "textFormat": {"bold": True}}},
     "fields": "userEnteredFormat(horizontalAlignment,textFormat)"}})
 
-# 6) Borders
 requests.append({"updateBorders": {
     "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": DATA_START+n_rows,
               "startColumnIndex": 0, "endColumnIndex": n_cols},
@@ -311,7 +298,6 @@ requests.append({"updateBorders": {
     "left": {"style":"SOLID","color":GRID}, "right": {"style":"SOLID","color":GRID},
     "innerHorizontal": {"style":"SOLID","color":GRID}, "innerVertical": {"style":"SOLID","color":GRID}}})
 
-# 7) Highlight
 highlight_cols = ["NEW OPD","F/U OPD","Total OPD Done","RPP Suggested",
                   "Convergation","Sessions Done","Active Client","Inactive Client"]
 reverse_cols = {"Inactive Client"}
@@ -337,7 +323,6 @@ for col in highlight_cols:
                 "cell": {"userEnteredFormat": {"backgroundColor": color}},
                 "fields": "userEnteredFormat.backgroundColor"}})
 
-# 8) Auto width + row heights
 requests.append({"autoResizeDimensions": {
     "dimensions": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": n_cols}}})
 requests.append({"updateDimensionProperties": {
@@ -372,7 +357,6 @@ _opd      = _get("OPD_Data")
 _plan     = _get("Plan_Data")
 _session  = _get("Session_Data")
 
-# A. OPD (1 se kal tak)
 _opd["opd_date"] = pd.to_datetime(_opd["opd_date"], errors="coerce").dt.date
 _opd_r = _opd[(_opd["opd_date"] >= _m_start) & (_opd["opd_date"] <= _y)].copy()
 _opd_r["therapist"] = _opd_r["assigned_to_name"].apply(map_final)
@@ -384,7 +368,6 @@ _opd_grp = _opd_r.groupby("therapist").agg(
 ).reset_index()
 _opd_grp["total_opd"] = _opd_grp["new_opd"] + _opd_grp["fu_opd"]
 
-# B. Sessions (1 se kal tak)
 _session["slot_date"] = pd.to_datetime(_session["slot_date"], errors="coerce").dt.date
 _sess_r = _session[(_session["slot_date"] >= _m_start) & (_session["slot_date"] <= _y)].copy()
 _sess_r["user_id"] = _sess_r["user_id"].astype(str).str.strip()
@@ -393,7 +376,6 @@ _sess_r = _sess_r[_sess_r["therapist"].notna()]
 _sess_grp = _sess_r.groupby("therapist")["total_sessions"].sum().reset_index()
 _sess_grp.columns = ["therapist", "sessions_done"]
 
-# C. Convergation — is range me NEW OPD + usi patient ka plan isi range me
 _plan["enrollment_date"] = pd.to_datetime(_plan["enrollment_date"], errors="coerce").dt.date
 _opd_new = _opd_r[_opd_r["opd_status"] == "NEW OPD"].copy()
 _opd_new["patient_ref_id"] = _opd_new["patient_ref_id"].astype(str).str.strip()
@@ -406,7 +388,6 @@ _opd_new["converted"] = _opd_new["patient_ref_id"].isin(_conv_pat)
 _cr = _opd_new[_opd_new["converted"]].drop_duplicates(subset=["patient_ref_id", "therapist"])
 _conv_grp = _cr.groupby("therapist").size().reset_index(name="convergation")
 
-# D. Active (MTD)
 _active["active_month_dt"] = pd.to_datetime(_active["active_month"], format="%b-%y", errors="coerce")
 _cur = pd.Timestamp(_m_start)
 _act_m = _active[_active["active_month_dt"] == _cur].copy()
@@ -416,7 +397,6 @@ _act_long = pd.concat([_a1[["therapist"]], _a2[["therapist"]]], ignore_index=Tru
 _act_long = _act_long[_act_long["therapist"].notna()]
 _active_grp = _act_long.groupby("therapist").size().reset_index(name="active_client")
 
-# E. Inactive (MTD)
 _inactive["inactive_date"] = pd.to_datetime(_inactive["inactive_date"], errors="coerce").dt.date
 _in_m = _inactive[(_inactive["inactive_date"] >= _m_start)
                   & (_inactive["inactive_date"] <= _y)].copy()
@@ -426,7 +406,6 @@ _in_long = pd.concat([_i1[["therapist"]], _i2[["therapist"]]], ignore_index=True
 _in_long = _in_long[_in_long["therapist"].notna()]
 _inactive_grp = _in_long.groupby("therapist").size().reset_index(name="inactive_client")
 
-# F. Merge
 _base = pd.concat([_active_grp[["therapist"]], _opd_grp[["therapist"]],
                    _sess_grp[["therapist"]], _conv_grp[["therapist"]],
                    _inactive_grp[["therapist"]]], ignore_index=True).drop_duplicates()
@@ -447,7 +426,6 @@ _mtd = _mtd[["therapist","new_opd","fu_opd","total_opd","rpp_suggested",
 _mtd.columns = ["Therapist","NEW OPD","F/U OPD","Total OPD Done","RPP Suggested",
                 "Convergation","Sessions Done","Active Client","Inactive Client"]
 
-# G. Sheet write + format (alag tab)
 _TAB = "MTD_Performance"
 replace_worksheet(sheet, _TAB, _mtd)
 _ws = sheet.worksheet(_TAB)
@@ -493,7 +471,7 @@ if _req:
 print(f"MTD_Performance tab banayi ({_m_start.strftime('%d-%m-%Y')} to {_y.strftime('%d-%m-%Y')})")
 
 # ============================================================
-# 5. EMAIL — Yesterday + MTD report (HTML body, highlights ke saath)
+# 5. EMAIL — Yesterday + MTD report (To / CC / BCC)
 # ============================================================
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -502,14 +480,22 @@ from email.mime.text import MIMEText
 GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
-# abhi test ke liye apne aap ko; baad me list me aur emails add karo
-RECIPIENTS = ["neeleshdwivedirgpv@gmail.com"]
+# === Yahan apni asli email IDs daalo ===
+TO = [
+    "tanmay@emoneeds.com",
+]
+CC = [
+    "neelesh@emoneeds.com",
+    
+]
+BCC = [
+    "neeleshdwivedirgpv@gmail.com",
+]
 
 def df_to_html(df, title, reverse_cols={"Inactive Client"}):
     """DataFrame ko styled HTML table banao, green/red highlight ke saath."""
     highlight_cols = ["NEW OPD","F/U OPD","Total OPD Done","RPP Suggested",
                       "Convergation","Sessions Done","Active Client","Inactive Client"]
-    # har column ke green/red values nikaalo (zero ignore)
     col_hi_lo = {}
     for c in highlight_cols:
         if c in df.columns:
@@ -552,12 +538,11 @@ def df_to_html(df, title, reverse_cols={"Inactive Client"}):
     html += '</table></div>'
     return html
 
-# dono reports ka HTML banao
 _y_str = yesterday.strftime("%d-%m-%Y")
 _m_str = _m_start.strftime("%d-%m-%Y")
 html_body = f'''
 <html><body>
-<p style="font-family:Arial;font-size:13px;">Dear [Boss's Name],<br><br>
+<p style="font-family:Arial;font-size:13px;">Dear Team,<br><br>
 Please find below the Clinical Performance report for your review.<br><br>
 The report covers two views &mdash; <b>Yesterday's Performance</b> (therapist-wise activity for the previous day) and <b>Month-to-Date (MTD) Performance</b> (cumulative from the 1st of the month up to yesterday). Metrics include OPD (New/Follow-up), RPP suggestions, conversions, sessions conducted, and active/inactive clients.<br><br>
 For quick reference, the highest performer in each metric is highlighted in green and the lowest in red.</p>
@@ -573,11 +558,13 @@ Data Analyst, Emoneeds</p>
 msg = MIMEMultipart("alternative")
 msg["Subject"] = f"Clinical Performance Report — {_y_str}"
 msg["From"] = GMAIL_USER
-msg["To"] = ", ".join(RECIPIENTS)
+msg["To"] = ", ".join(TO)
+msg["Cc"] = ", ".join(CC)
 msg.attach(MIMEText(html_body, "html"))
 
+all_recipients = TO + CC + BCC
 with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
     server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-    server.sendmail(GMAIL_USER, RECIPIENTS, msg.as_string())
+    server.sendmail(GMAIL_USER, all_recipients, msg.as_string())
 
-print(f"Email bheji gayi: {', '.join(RECIPIENTS)}")
+print(f"Email bheji gayi: To={len(TO)}, Cc={len(CC)}, Bcc={len(BCC)}")
