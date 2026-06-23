@@ -2,9 +2,8 @@ name: Clinical Report to Google Sheets
 
 on:
   schedule:
-    # 5:30 AM UTC = 11:00 AM IST (roz)
-    - cron: "30 5 * * *"
-  workflow_dispatch:        # manual run button
+    - cron: "30 4 * * *"   # 10:00 AM IST
+  workflow_dispatch:
 
 jobs:
   run-report:

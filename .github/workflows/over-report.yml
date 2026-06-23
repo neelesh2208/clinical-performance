@@ -2,13 +2,13 @@ name: Overall Performance Report
 
 on:
   schedule:
-    - cron: "30 5 * * *"   # 11:00 AM IST roz
-  workflow_dispatch:        # manual run button (testing ke liye)
+    - cron: "30 4 * * *"   # 10:00 AM IST रोज
+  workflow_dispatch:
 
 jobs:
   run-report:
     runs-on: ubuntu-latest
-    timeout-minutes: 20      # ek run 20 min se zyada atka to band (safety)
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repo
@@ -36,7 +36,7 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         with:
-          timeout_minutes: 8        # ek koshish ki max time
-          max_attempts: 5           # 5 baar tak try karega
-          retry_wait_seconds: 120   # har fail ke baad 2 min ruk ke
+          timeout_minutes: 8
+          max_attempts: 5
+          retry_wait_seconds: 120
           command: python Over_Performance_Report.py
