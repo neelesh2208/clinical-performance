@@ -60,10 +60,10 @@ inactive["inactive_date"] = pd.to_datetime(inactive["inactive_date"], errors="co
 active["active_month_dt"] = pd.to_datetime(active["active_month"], format="%b-%y", errors="coerce")
 
 # ---- AMOUNT cleanup ----
-# OPD amount: numeric banao, 0 ya NULL/blank ko 1500 maan lo
+# OPD amount: numeric, 0 ya NULL ko 1500 maano
 opd["amount"] = pd.to_numeric(opd["amount"], errors="coerce").fillna(0)
 opd.loc[opd["amount"] == 0, "amount"] = 1500
-# Plan amount: numeric banao (New Plan revenue ke liye)
+# Plan amount: numeric (New Plan/Renewal/Revival revenue)
 plan["amount"] = pd.to_numeric(plan["amount"], errors="coerce").fillna(0)
 
 BRANCH_RENAME = {"Emoneeds": "Gurgaon", "Emoneeds GK": "GK"}
@@ -75,6 +75,8 @@ CATEGORIES = ["New OPDs","F/U OPDs","New Plan","Renewals","Revivals",
               "Inactive","Active","Assessments","Suggest RPP","NO2P %"]
 REVERSE = {"Inactive"}
 PCT_ROWS = {"NO2P %"}
+# in categories ka amount dikhega (baaki blank)
+AMOUNT_CATS = {"New OPDs","F/U OPDs","New Plan","Renewals","Revivals"}
 
 # ====== 4b. TARGET CSV ======
 TARGET_MAP = {}
@@ -94,7 +96,6 @@ def get_target(scope_name, category, last_month_active):
     return TARGET_MAP.get((scope_name, category), None)
 
 def get_revenue_target(scope_name):
-    """target.csv se branch ka Revenue target (na ho to None)."""
     return TARGET_MAP.get((scope_name, "Revenue"), None)
 
 # ====== 5. METRICS ======
@@ -103,6 +104,13 @@ def count_range(opd, plan, active, inactive, d1, d2, active_ref):
     def rc(df): return len(df[(df["opd_date"]>=d1)&(df["opd_date"]<=d2)&(df["is_suggest_rpp"]=="Yes")])
     def pc(df,p): return len(df[(df["enrollment_date"]>=d1)&(df["enrollment_date"]<=d2)&(df["plan_type"]==p)])
     def pct(a,b): return round(a/b*100,1) if b else 0.0
+    # amount helpers
+    def oa(df, s):  # opd amount by status
+        sub=df[(df["opd_date"]>=d1)&(df["opd_date"]<=d2)&(df["opd_status"]==s)]
+        return float(sub["amount"].sum())
+    def pa(df, p):  # plan amount by plan_type
+        sub=df[(df["enrollment_date"]>=d1)&(df["enrollment_date"]<=d2)&(df["plan_type"]==p)]
+        return float(sub["amount"].sum())
     r = {}
     r["New OPDs"]=oc(opd,"NEW OPD"); r["F/U OPDs"]=oc(opd,"OLD OPD")
     r["New Plan"]=pc(plan,"New Plan"); r["Renewals"]=pc(plan,"Renewal"); r["Revivals"]=pc(plan,"Revival")
@@ -110,7 +118,12 @@ def count_range(opd, plan, active, inactive, d1, d2, active_ref):
     r["Active"]=len(active[active["active_month_dt"]==active_ref])
     r["Assessments"]=0; r["Suggest RPP"]=rc(opd)
     r["NO2P %"]=pct(r["New Plan"], r["New OPDs"])
-    return r
+    # amounts
+    amt = {}
+    amt["New OPDs"]=oa(opd,"NEW OPD"); amt["F/U OPDs"]=oa(opd,"OLD OPD")
+    amt["New Plan"]=pa(plan,"New Plan"); amt["Renewals"]=pa(plan,"Renewal"); amt["Revivals"]=pa(plan,"Revival")
+    amt["_total_revenue"]=amt["New OPDs"]+amt["F/U OPDs"]+amt["New Plan"]+amt["Renewals"]+amt["Revivals"]
+    return r, amt
 
 def last_month_active_count(active):
     return len(active[active["active_month_dt"]==lm_active_ref])
@@ -124,10 +137,14 @@ def arrow_pct(curr, prev, reverse=False):
     color=("red" if up else "green") if reverse else ("green" if up else "red")
     return f"{arrow} {abs(round(change,1))}%", color
 
+def fmt_amt(v):
+    """Amount ko readable banao (1,23,456 style nahi, simple comma)."""
+    return f"{int(round(v)):,}" if v else ""
+
 def build_df(opd, plan, active, inactive, scope_name, y_col, m_col, lm_col):
-    yd  = count_range(opd,plan,active,inactive, yesterday,yesterday, pd.Timestamp(month_start))
-    mtd = count_range(opd,plan,active,inactive, month_start,yesterday, pd.Timestamp(month_start))
-    lm  = count_range(opd,plan,active,inactive, lm_start,lm_end, lm_active_ref)
+    yd,  yd_amt  = count_range(opd,plan,active,inactive, yesterday,yesterday, pd.Timestamp(month_start))
+    mtd, mtd_amt = count_range(opd,plan,active,inactive, month_start,yesterday, pd.Timestamp(month_start))
+    lm,  lm_amt  = count_range(opd,plan,active,inactive, lm_start,lm_end, lm_active_ref)
     lm_active = last_month_active_count(active)
 
     rows=[]; vs_colors=[]; tgt_colors=[]
@@ -154,9 +171,26 @@ def build_df(opd, plan, active, inactive, scope_name, y_col, m_col, lm_col):
             yv,mv,lv=f"{yd[cat]}%",f"{mtd[cat]}%",f"{lm[cat]}%"
         else:
             yv,mv,lv=yd[cat],mtd[cat],lm[cat]
-        rows.append([cat,yv,mv,lv,vs_txt,t_t,t_p,t_pend])
+        # amount column (sirf paise wali categories)
+        amt_val = fmt_amt(mtd_amt[cat]) if cat in AMOUNT_CATS else ""
+        rows.append([cat,yv,mv,lv,vs_txt,amt_val,t_t,t_p,t_pend])
         vs_colors.append(vs_c); tgt_colors.append(t_c)
-    cols=["Category",y_col,m_col,lm_col,"vs Last Month","Target","% Achieved","Pending %"]
+
+    # ---- REVENUE row (poora total: OPD + New Plan + Renewal + Revival) ----
+    rev_y, rev_m, rev_l = yd_amt["_total_revenue"], mtd_amt["_total_revenue"], lm_amt["_total_revenue"]
+    rev_vs_txt, rev_vs_c = arrow_pct(rev_m, rev_l, reverse=False)
+    rev_tgt = get_revenue_target(scope_name)
+    if rev_tgt:
+        rp = round(rev_m/rev_tgt*100,1) if rev_tgt else 0
+        rev_t_t, rev_t_p, rev_t_pend = f"{rev_tgt:,}", f"{rp}%", f"{round(max(0,100-rp),1)}%"
+        rev_t_c = "green" if rev_m>=rev_tgt else "red"
+    else:
+        rev_t_t, rev_t_p, rev_t_pend, rev_t_c = "", "", "", "none"
+    rows.append(["Revenue", fmt_amt(rev_y), fmt_amt(rev_m), fmt_amt(rev_l),
+                 rev_vs_txt, fmt_amt(rev_m), rev_t_t, rev_t_p, rev_t_pend])
+    vs_colors.append(rev_vs_c); tgt_colors.append(rev_t_c)
+
+    cols=["Category",y_col,m_col,lm_col,"vs Last Month","Amount","Target","% Achieved","Pending %"]
     return pd.DataFrame(rows,columns=cols), vs_colors, tgt_colors
 
 y_str=f"{yesterday.day}-{yesterday.strftime('%b')}"
@@ -171,7 +205,7 @@ print("Overall ready")
 TEAL={"red":0.18,"green":0.55,"blue":0.56}; WHITE={"red":1,"green":1,"blue":1}
 GRID={"red":0.3,"green":0.3,"blue":0.3}
 G_TXT={"red":0.0,"green":0.5,"blue":0.0}; R_TXT={"red":0.8,"green":0.0,"blue":0.0}
-BORDER_STYLE="SOLID_MEDIUM"   # patli="SOLID", moti="SOLID_MEDIUM", sabse moti="SOLID_THICK"
+BORDER_STYLE="SOLID_MEDIUM"
 
 def replace_ws(title, df):
     try: sheet.del_worksheet(sheet.worksheet(title))
@@ -187,6 +221,9 @@ def base_format(sid, n_cols, n_rows, title_text):
     req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":1,"endRowIndex":2,"startColumnIndex":0,"endColumnIndex":n_cols},"cell":{"userEnteredFormat":{"backgroundColor":TEAL,"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE","textFormat":{"bold":True,"foregroundColor":WHITE},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat,wrapStrategy)"}})
     req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":2,"endRowIndex":2+n_rows,"startColumnIndex":0,"endColumnIndex":1},"cell":{"userEnteredFormat":{"horizontalAlignment":"LEFT","textFormat":{"bold":True}}},"fields":"userEnteredFormat(horizontalAlignment,textFormat)"}})
     req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":2,"endRowIndex":2+n_rows,"startColumnIndex":1,"endColumnIndex":n_cols},"cell":{"userEnteredFormat":{"horizontalAlignment":"CENTER"}},"fields":"userEnteredFormat.horizontalAlignment"}})
+    # REVENUE row (last data row) highlight — halka teal bg + bold
+    rev_row = 2 + n_rows - 1
+    req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":rev_row,"endRowIndex":rev_row+1,"startColumnIndex":0,"endColumnIndex":n_cols},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.88,"green":0.96,"blue":0.96},"textFormat":{"bold":True}}},"fields":"userEnteredFormat(backgroundColor,textFormat)"}})
     req.append({"updateBorders":{"range":{"sheetId":sid,"startRowIndex":0,"endRowIndex":2+n_rows,"startColumnIndex":0,"endColumnIndex":n_cols},"top":{"style":BORDER_STYLE,"color":GRID},"bottom":{"style":BORDER_STYLE,"color":GRID},"left":{"style":BORDER_STYLE,"color":GRID},"right":{"style":BORDER_STYLE,"color":GRID},"innerHorizontal":{"style":BORDER_STYLE,"color":GRID},"innerVertical":{"style":BORDER_STYLE,"color":GRID}}})
     req.append({"autoResizeDimensions":{"dimensions":{"sheetId":sid,"dimension":"COLUMNS","startIndex":0,"endIndex":n_cols}}})
     return req
@@ -203,7 +240,7 @@ def color_col(sid, colors, col_idx, data_start=2):
 # ====== 7. OVERALL ======
 ws1=replace_ws("Overall_Summary", overall_df); sid1=ws1._properties["sheetId"]
 nc1=len(overall_df.columns); nr1=len(overall_df)
-req=base_format(sid1,nc1,nr1,"Overall Performance — MTD-1 vs Last Month + Target")
+req=base_format(sid1,nc1,nr1,"Overall Performance — MTD-1 vs Last Month + Target + Revenue")
 cols1=list(overall_df.columns)
 req+=color_col(sid1, ov_vs, cols1.index("vs Last Month"))
 req+=color_col(sid1, ov_tgt, cols1.index("% Achieved"))
@@ -213,11 +250,8 @@ print("Overall_Summary done")
 # ====== 8. DURATION HELPERS (branch-wise, count + amount) ======
 DURATION_BUCKETS = [(1,"1 Month"),(2,"2 Month"),(3,"3 Month"),
                     (6,"6 Month"),(9,"9 Month"),(12,"1 Year")]
-
-# sirf New Plan rows (duration + amount ke liye)
 npd_all = plan[plan["plan_type"] == "New Plan"].copy()
 npd_all["total_service_months"] = pd.to_numeric(npd_all["total_service_months"], errors="coerce")
-
 _known = {m for m, _ in DURATION_BUCKETS}
 _other = npd_all[~npd_all["total_service_months"].isin(_known)]
 if len(_other):
@@ -225,112 +259,57 @@ if len(_other):
           sorted(_other["total_service_months"].dropna().unique()))
 
 def duration_amount_table(npd_branch, d1, d2):
-    """Ek branch ke New Plans ka duration-wise Count + Amount table (MTD-1 period)."""
-    sub = npd_branch[(npd_branch["enrollment_date"] >= d1) &
-                     (npd_branch["enrollment_date"] <= d2)]
+    sub = npd_branch[(npd_branch["enrollment_date"] >= d1) & (npd_branch["enrollment_date"] <= d2)]
     rows = []
-    tot_count = 0; tot_amount = 0.0
     for months, label in DURATION_BUCKETS:
         seg = sub[sub["total_service_months"] == months]
-        c = len(seg); a = float(seg["amount"].sum())
-        rows.append([label, c, int(round(a))])
-        tot_count += c; tot_amount += a
-    df = pd.DataFrame(rows, columns=["New Plan Duration", "Count", "Amount"])
-    return df, tot_count, int(round(tot_amount))
+        rows.append([label, len(seg), int(round(float(seg["amount"].sum())))])
+    return pd.DataFrame(rows, columns=["New Plan Duration", "Count", "Amount"])
 
-# ====== 9. PER-BRANCH TABS (summary + duration + revenue match) ======
+# ====== 9. PER-BRANCH TABS (summary[with amount+revenue] + duration) ======
 branches=sorted(set(opd["hosp_name"])|set(plan["hosp_name"])|set(active["hosp_name"])|set(inactive["hosp_name"]))
 branches=[b for b in branches if b and b!="Unknown"]
 
 def write_branch_tab(b):
-    """Ek branch ka apna tab: summary + duration(Count+Amount) + Revenue match."""
-    # --- branch ke filtered frames ---
     b_opd=opd[opd["hosp_name"]==b]; b_plan=plan[plan["hosp_name"]==b]
     b_active=active[active["hosp_name"]==b]; b_inactive=inactive[inactive["hosp_name"]==b]
 
-    # --- 1. summary df (Overall jaisa) ---
+    # summary (ab Amount column + Revenue row ke saath)
     bdf, bvs, btg = build_df(b_opd,b_plan,b_active,b_inactive,b,Y_COL,M_COL,LM_COL)
 
-    # --- 2. duration (Count + Amount), MTD-1 ---
-    b_npd = npd_all[npd_all["hosp_name"]==b]
-    dur_df, dur_count, dur_amount = duration_amount_table(b_npd, month_start, yesterday)
-
-    # --- 3. OPD amount (MTD-1), saare OPD, 0->1500 already PREP me ---
-    opd_mtd = b_opd[(b_opd["opd_date"]>=month_start)&(b_opd["opd_date"]<=yesterday)]
-    opd_amount = int(round(float(opd_mtd["amount"].sum())))
-
-    # --- tab banao + summary likho ---
-    ws = replace_ws(b, bdf)
-    sid = ws._properties["sheetId"]
+    ws = replace_ws(b, bdf); sid = ws._properties["sheetId"]
     nc = len(bdf.columns); nr = len(bdf)
-    req = base_format(sid, nc, nr, f"{b} — Performance (MTD-1 vs Last Month + Target)")
+    req = base_format(sid, nc, nr, f"{b} — Performance (MTD-1 vs Last Month + Target + Revenue)")
     cols = list(bdf.columns)
     req += color_col(sid, bvs, cols.index("vs Last Month"))
     req += color_col(sid, btg, cols.index("% Achieved"))
     sheet.batch_update({"requests": req})
 
-    # --- duration block + revenue rows (summary ke neeche) ---
-    # base_format ne 1 row insert ki thi (title), to data 1 row neeche khisak gaya:
-    # sheet layout: row1=title, row2=header, row3..(2+nr)=data  -> last data row = 2+nr
-    dur_start = 2 + nr + 2          # summary ke baad 2 row gap (0-indexed)
-    rev_target = get_revenue_target(b)
-
+    # duration table (Count + Amount), MTD-1 — summary ke neeche
+    b_npd = npd_all[npd_all["hosp_name"]==b]
+    dur_df = duration_amount_table(b_npd, month_start, yesterday)
+    dur_start = 2 + nr + 2
+    dnc = len(dur_df.columns); dnr = len(dur_df)
+    set_with_dataframe(ws, dur_df, row=dur_start + 2, col=1)
     req2 = []
-    # ---- duration heading ----
-    dnc = len(dur_df.columns)
-    set_with_dataframe(ws, dur_df, row=dur_start + 2, col=1)   # heading+header ke neeche
     req2.append({"mergeCells":{"range":{"sheetId":sid,"startRowIndex":dur_start,"endRowIndex":dur_start+1,"startColumnIndex":0,"endColumnIndex":dnc},"mergeType":"MERGE_ALL"}})
     req2.append({"updateCells":{"rows":[{"values":[{"userEnteredValue":{"stringValue":f"New Plan Duration & Amount — MTD-1 ({mtd_str})"},"userEnteredFormat":{"backgroundColor":TEAL,"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE","textFormat":{"bold":True,"fontSize":12,"foregroundColor":WHITE}}}]}],"fields":"userEnteredValue,userEnteredFormat","start":{"sheetId":sid,"rowIndex":dur_start,"columnIndex":0}}})
     dhdr = dur_start + 1
     req2.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":dhdr,"endRowIndex":dhdr+1,"startColumnIndex":0,"endColumnIndex":dnc},"cell":{"userEnteredFormat":{"backgroundColor":TEAL,"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE","textFormat":{"bold":True,"foregroundColor":WHITE},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat,wrapStrategy)"}})
-    dnr = len(dur_df)
     req2.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":dhdr+1,"endRowIndex":dhdr+1+dnr,"startColumnIndex":0,"endColumnIndex":1},"cell":{"userEnteredFormat":{"horizontalAlignment":"LEFT","textFormat":{"bold":True}}},"fields":"userEnteredFormat(horizontalAlignment,textFormat)"}})
     req2.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":dhdr+1,"endRowIndex":dhdr+1+dnr,"startColumnIndex":1,"endColumnIndex":dnc},"cell":{"userEnteredFormat":{"horizontalAlignment":"CENTER"}},"fields":"userEnteredFormat.horizontalAlignment"}})
-
-    # ---- summary rows (Total New Plan Amount, OPD Amount, Revenue target match) ----
-    summary_start = dhdr + 1 + dnr + 1   # duration table ke baad 1 gap row
-    if rev_target:
-        ach_pct = round(dur_amount / rev_target * 100, 1) if rev_target else 0
-        rev_color = G_TXT if dur_amount >= rev_target else R_TXT
-        match_txt = f"{ach_pct}%"
-    else:
-        ach_pct = None; rev_color = None; match_txt = "(no target)"
-
-    extra_rows = [
-        ["New Plan — Total Amount", dur_amount, ""],
-        ["OPD — Total Amount (0 → 1500)", opd_amount, ""],
-        ["Revenue Target (target.csv)", rev_target if rev_target else "—", ""],
-        ["Revenue Achieved %", match_txt, ""],
-    ]
-    set_with_dataframe(ws, pd.DataFrame(extra_rows, columns=["Metric","Value","_"]),
-                       row=summary_start + 1, col=1, include_column_header=False)
-    # in rows ko bold + left
-    req2.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":summary_start,"endRowIndex":summary_start+len(extra_rows),"startColumnIndex":0,"endColumnIndex":1},"cell":{"userEnteredFormat":{"horizontalAlignment":"LEFT","textFormat":{"bold":True}}},"fields":"userEnteredFormat(horizontalAlignment,textFormat)"}})
-    req2.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":summary_start,"endRowIndex":summary_start+len(extra_rows),"startColumnIndex":1,"endColumnIndex":2},"cell":{"userEnteredFormat":{"horizontalAlignment":"CENTER","textFormat":{"bold":True}}},"fields":"userEnteredFormat(horizontalAlignment,textFormat)"}})
-    # Revenue Achieved % row ko green/red
-    if rev_color:
-        rev_row = summary_start + 3   # 4th extra row (0-indexed +3)
-        req2.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":rev_row,"endRowIndex":rev_row+1,"startColumnIndex":1,"endColumnIndex":2},"cell":{"userEnteredFormat":{"textFormat":{"bold":True,"foregroundColor":rev_color}}},"fields":"userEnteredFormat.textFormat"}})
-
-    # ---- borders for duration block + summary rows ----
-    block_end = summary_start + len(extra_rows)
     req2.append({"updateBorders":{"range":{"sheetId":sid,"startRowIndex":dur_start,"endRowIndex":dhdr+1+dnr,"startColumnIndex":0,"endColumnIndex":dnc},"top":{"style":BORDER_STYLE,"color":GRID},"bottom":{"style":BORDER_STYLE,"color":GRID},"left":{"style":BORDER_STYLE,"color":GRID},"right":{"style":BORDER_STYLE,"color":GRID},"innerHorizontal":{"style":BORDER_STYLE,"color":GRID},"innerVertical":{"style":BORDER_STYLE,"color":GRID}}})
-    req2.append({"updateBorders":{"range":{"sheetId":sid,"startRowIndex":summary_start,"endRowIndex":block_end,"startColumnIndex":0,"endColumnIndex":2},"top":{"style":BORDER_STYLE,"color":GRID},"bottom":{"style":BORDER_STYLE,"color":GRID},"left":{"style":BORDER_STYLE,"color":GRID},"right":{"style":BORDER_STYLE,"color":GRID},"innerHorizontal":{"style":BORDER_STYLE,"color":GRID},"innerVertical":{"style":BORDER_STYLE,"color":GRID}}})
     req2.append({"autoResizeDimensions":{"dimensions":{"sheetId":sid,"dimension":"COLUMNS","startIndex":0,"endIndex":max(nc,dnc)}}})
     sheet.batch_update({"requests": req2})
+    return bdf
 
-    return dict(branch=b, dur_df=dur_df, dur_amount=dur_amount,
-                opd_amount=opd_amount, rev_target=rev_target)
-
-branch_results = []
+branch_dfs = {}
 for b in branches:
-    res = write_branch_tab(b)
-    branch_results.append(res)
-    print(f"{b} tab done — New Plan Amt: {res['dur_amount']}, OPD Amt: {res['opd_amount']}")
-
+    branch_dfs[b] = write_branch_tab(b)
+    print(f"{b} tab done")
 print(f"ALL BRANCH TABS DONE ({len(branches)} branches)")
 
-# ====== 10. EMAIL — Overall + per-branch summary ======
+# ====== 10. EMAIL ======
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -338,14 +317,11 @@ from email.mime.text import MIMEText
 GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
-# === Yahan apni asli email IDs daalo ===
 TO  = ["neelesh@emoneeds.com"]
 CC  = ["neelesh@emoneeds.com"]
 BCC = ["neeleshdwivedirgpv@gmail.com"]
 
-
 def df_to_html(df, title):
-    """Summary table (arrow colors) -> HTML."""
     html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
     html += '<table style="border-collapse:collapse;font-family:Arial;font-size:13px;">'
     html += '<tr>'
@@ -353,52 +329,22 @@ def df_to_html(df, title):
         html += (f'<th style="background:#028090;color:#ffffff;padding:8px 12px;'
                  f'border:2px solid #555555;text-align:center;">{col}</th>')
     html += '</tr>'
-    for _, row in df.iterrows():
-        html += '<tr>'
+    last_idx = len(df) - 1
+    for ridx, (_, row) in enumerate(df.iterrows()):
+        # Revenue row (aakhri) ko halka highlight
+        rbg = "background:#e0f5f3;" if ridx == last_idx else ""
+        html += f'<tr style="{rbg}">'
         for col in df.columns:
             val = row[col]; color = "#000000"
             if "vs" in str(col).lower():
                 if "⬆️" in str(val): color = "#1a7f37"
                 elif "⬇️" in str(val): color = "#c0392b"
+            bold = "font-weight:bold;" if ridx == last_idx else ""
             html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
-                     f'text-align:center;color:{color};">{val}</td>')
+                     f'text-align:center;color:{color};{bold}">{val}</td>')
         html += '</tr>'
     html += '</table>'
     return html
-
-
-def dur_to_html(b_res):
-    """Branch ka duration(Count+Amount) + revenue match -> HTML."""
-    b = b_res["branch"]; df = b_res["dur_df"]
-    html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{b} — New Plan Duration &amp; Amount (MTD-1)</h3>'
-    html += '<table style="border-collapse:collapse;font-family:Arial;font-size:13px;">'
-    html += '<tr>'
-    for col in df.columns:
-        html += (f'<th style="background:#028090;color:#ffffff;padding:8px 12px;'
-                 f'border:2px solid #555555;text-align:center;">{col}</th>')
-    html += '</tr>'
-    for _, row in df.iterrows():
-        html += '<tr>'
-        for i, col in enumerate(df.columns):
-            align = "left" if i == 0 else "center"
-            html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
-                     f'text-align:{align};">{row[col]}</td>')
-        html += '</tr>'
-    html += '</table>'
-    # revenue match line
-    rt = b_res["rev_target"]; da = b_res["dur_amount"]; oa = b_res["opd_amount"]
-    if rt:
-        pct = round(da/rt*100,1) if rt else 0
-        col = "#1a7f37" if da>=rt else "#c0392b"
-        rev_line = (f'New Plan Amount: <b>{da:,}</b> &nbsp;|&nbsp; '
-                    f'Revenue Target: <b>{rt:,}</b> &nbsp;|&nbsp; '
-                    f'Achieved: <b style="color:{col};">{pct}%</b>')
-    else:
-        rev_line = f'New Plan Amount: <b>{da:,}</b> &nbsp;|&nbsp; Revenue Target: <i>not set</i>'
-    html += (f'<p style="font-family:Arial;font-size:12px;margin:6px 0 0;">{rev_line}'
-             f'<br>OPD Amount (0→1500): <b>{oa:,}</b></p>')
-    return html
-
 
 _y_str  = yesterday.strftime("%d %b %Y")
 _m_str  = month_start.strftime("%d %b")
@@ -410,39 +356,31 @@ legend_html = f'''
   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Yesterday</b></td>
       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Single-day performance for {yesterday.strftime('%d %b %Y')}.</td></tr>
   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">MTD-1</b></td>
-      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Month-to-Date — cumulative figures from the 1st up to yesterday ({_m_str} – {yesterday.strftime('%d %b')}).</td></tr>
+      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Month-to-Date — cumulative from the 1st up to yesterday ({_m_str} – {yesterday.strftime('%d %b')}).</td></tr>
   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Last Month</b></td>
       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Same period last month for a like-for-like comparison ({_lm_str}).</td></tr>
   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">vs Last Month</b></td>
       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Change in MTD-1 vs same period last month. ⬆️ green = improvement, ⬇️ red = decline.</td></tr>
+  <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Amount</b></td>
+      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">MTD-1 revenue for OPDs, New Plan, Renewals & Revivals. OPD me 0 ko 1500 maana gaya.</td></tr>
   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Target / % Achieved / Pending&nbsp;%</b></td>
       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Monthly goal, % achieved as of MTD-1, % remaining.</td></tr>
-  <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Amount</b></td>
-      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">New Plan revenue per duration. Revenue Target (target.csv) se compare hota hai.</td></tr>
-  <tr><td style="padding:6px 12px;"><b style="color:#07333B;">OPD Amount</b></td>
-      <td style="padding:6px 12px;">Total OPD revenue; jahan amount 0 tha use 1500 maana gaya.</td></tr>
+  <tr><td style="padding:6px 12px;"><b style="color:#07333B;">Revenue</b></td>
+      <td style="padding:6px 12px;">OPD + New Plan + Renewal + Revival ka total, target.csv ke Revenue target se compare.</td></tr>
 </table>
 '''
 
 branch_html = ""
-for res in branch_results:
-    # har branch ka summary dobara banao email ke liye
-    b=res["branch"]
-    bdf,_,_ = build_df(opd[opd["hosp_name"]==b],plan[plan["hosp_name"]==b],
-                       active[active["hosp_name"]==b],inactive[inactive["hosp_name"]==b],
-                       b,Y_COL,M_COL,LM_COL)
-    branch_html += df_to_html(bdf, f"{b} — Summary ({_m_str} – {yesterday.strftime('%d %b %Y')})")
-    branch_html += "<br>"
-    branch_html += dur_to_html(res)
+for b in branches:
+    branch_html += df_to_html(branch_dfs[b], f"{b} — Summary ({_m_str} – {yesterday.strftime('%d %b %Y')})")
     branch_html += "<br><br>"
 
 html_body = f'''
 <html><body style="font-family:Arial;color:#222;">
 <p>Dear Tanmay,</p>
 <p>Please find the <b>Overall Performance Report</b> for
-<b>{yesterday.strftime('%d %b %Y')}</b> below, with the consolidated summary,
-each branch separately, New Plan duration &amp; amount, and revenue progress
-against target.</p>
+<b>{yesterday.strftime('%d %b %Y')}</b> below, with consolidated and branch-wise
+summaries, amounts, and revenue progress against target.</p>
 
 <p style="margin-bottom:4px;"><b style="color:#07333B;">How to read this report:</b></p>
 {legend_html}
@@ -453,7 +391,8 @@ against target.</p>
 
 <p style="margin-top:8px;">Favourable movements appear in
 <span style="color:#1a7f37;"><b>green</b></span>, unfavourable in
-<span style="color:#c0392b;"><b>red</b></span>.</p>
+<span style="color:#c0392b;"><b>red</b></span>. The Revenue row totals OPD, New Plan,
+Renewal and Revival amounts.</p>
 
 <p>This report is generated automatically and refreshes every day.</p>
 
