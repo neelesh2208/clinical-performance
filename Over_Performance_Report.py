@@ -225,7 +225,91 @@ print(f"Branch_Summary done ({len(branches)} branches)")
 print("ALL DONE")
 
 # ============================================================
-# 5. EMAIL — Yesterday + MTD report (To / CC / BCC)
+# 9. NEW PLAN DURATION (branch-wise: Gurgaon, GK, Total)
+# ============================================================
+
+# duration buckets: number -> label (image jaisa order)
+DURATION_BUCKETS = [(1,"1 Month"),(2,"2 Month"),(3,"3 Month"),
+                    (6,"6 Month"),(9,"9 Month"),(12,"1 Year")]
+
+# sirf New Plan wale rows, with valid duration
+npd = plan[plan["plan_type"] == "New Plan"].copy()
+npd["total_service_months"] = pd.to_numeric(
+    npd["total_service_months"], errors="coerce")
+
+# safety check: agar koi duration in 6 buckets ke bahar ho to warn
+_known = {m for m, _ in DURATION_BUCKETS}
+_other = npd[~npd["total_service_months"].isin(_known)]
+if len(_other):
+    print(f"⚠️  {len(_other)} New Plans with other durations:",
+          sorted(_other["total_service_months"].dropna().unique()))
+
+dur_branches = ["Gurgaon", "GK"]   # fixed order
+
+def duration_table(d1, d2):
+    """Ek period ke liye duration x branch count table banao."""
+    sub = npd[(npd["enrollment_date"] >= d1) & (npd["enrollment_date"] <= d2)]
+    rows = []
+    for months, label in DURATION_BUCKETS:
+        row = [label]
+        total = 0
+        for b in dur_branches:
+            c = len(sub[(sub["hosp_name"] == b) &
+                        (sub["total_service_months"] == months)])
+            row.append(c); total += c
+        row.append(total)
+        rows.append(row)
+    cols = ["New Plan Duration Time"] + dur_branches + ["Total"]
+    return pd.DataFrame(rows, columns=cols)
+
+# Yesterday aur MTD-1 dono
+npd_yday = duration_table(yesterday, yesterday)
+npd_mtd  = duration_table(month_start, yesterday)
+print("New Plan Duration tables ready")
+
+
+# ---- New_Plan_Duration tab (Yesterday + MTD-1, dono) ----
+def write_duration_block(ws, df, start_row, title_text):
+    """Ek duration table ko diye gaye row se likho (heading + table)."""
+    sid = ws._properties["sheetId"]
+    nc = len(df.columns)
+    # data daalo (heading ke neeche)
+    set_with_dataframe(ws, df, row=start_row + 2, col=1)
+    req = []
+    # heading merge + teal
+    req.append({"mergeCells":{"range":{"sheetId":sid,"startRowIndex":start_row,"endRowIndex":start_row+1,"startColumnIndex":0,"endColumnIndex":nc},"mergeType":"MERGE_ALL"}})
+    req.append({"updateCells":{"rows":[{"values":[{"userEnteredValue":{"stringValue":title_text},"userEnteredFormat":{"backgroundColor":TEAL,"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE","textFormat":{"bold":True,"fontSize":12,"foregroundColor":WHITE}}}]}],"fields":"userEnteredValue,userEnteredFormat","start":{"sheetId":sid,"rowIndex":start_row,"columnIndex":0}}})
+    # column header row teal
+    hdr = start_row + 1
+    req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":hdr,"endRowIndex":hdr+1,"startColumnIndex":0,"endColumnIndex":nc},"cell":{"userEnteredFormat":{"backgroundColor":TEAL,"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE","textFormat":{"bold":True,"foregroundColor":WHITE},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat,wrapStrategy)"}})
+    # first col bold-left, data center
+    nr = len(df)
+    req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":hdr+1,"endRowIndex":hdr+1+nr,"startColumnIndex":0,"endColumnIndex":1},"cell":{"userEnteredFormat":{"horizontalAlignment":"LEFT","textFormat":{"bold":True}}},"fields":"userEnteredFormat(horizontalAlignment,textFormat)"}})
+    req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":hdr+1,"endRowIndex":hdr+1+nr,"startColumnIndex":1,"endColumnIndex":nc},"cell":{"userEnteredFormat":{"horizontalAlignment":"CENTER"}},"fields":"userEnteredFormat.horizontalAlignment"}})
+    # Total column bold
+    req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":hdr,"endRowIndex":hdr+1+nr,"startColumnIndex":nc-1,"endColumnIndex":nc},"cell":{"userEnteredFormat":{"textFormat":{"bold":True}}},"fields":"userEnteredFormat.textFormat"}})
+    # borders
+    req.append({"updateBorders":{"range":{"sheetId":sid,"startRowIndex":start_row,"endRowIndex":hdr+1+nr,"startColumnIndex":0,"endColumnIndex":nc},"top":{"style":"SOLID","color":GRID},"bottom":{"style":"SOLID","color":GRID},"left":{"style":"SOLID","color":GRID},"right":{"style":"SOLID","color":GRID},"innerHorizontal":{"style":"SOLID","color":GRID},"innerVertical":{"style":"SOLID","color":GRID}}})
+    return req
+
+# tab banao (purana delete karke fresh)
+try: sheet.del_worksheet(sheet.worksheet("New_Plan_Duration"))
+except gspread.exceptions.WorksheetNotFound: pass
+ws3 = sheet.add_worksheet(title="New_Plan_Duration", rows="40", cols="8")
+
+req = []
+req += write_duration_block(ws3, npd_yday, 0,
+        f"New Plan Duration — Yesterday ({y_str})")
+# doosra table thoda neeche (pehle table = heading + header + 6 rows + gap)
+req += write_duration_block(ws3, npd_mtd, 11,
+        f"New Plan Duration — MTD-1 ({mtd_str})")
+req.append({"autoResizeDimensions":{"dimensions":{"sheetId":ws3._properties["sheetId"],"dimension":"COLUMNS","startIndex":0,"endIndex":4}}})
+sheet.batch_update({"requests": req})
+print("New_Plan_Duration tab done")
+
+
+# ============================================================
+# 10. EMAIL — Overall + Branch report (HTML body)
 # ============================================================
 
 import smtplib
@@ -239,13 +323,12 @@ GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 RECIPIENTS = [GMAIL_USER]
 
 
-# ---- 2. HTML TABLE HELPER ----
+# ---- HTML TABLE HELPER (arrow colors ke saath) ----
 def df_to_html(df, title):
     """DataFrame ko styled HTML email table banao (teal header + arrow colors)."""
     html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
     html += ('<table style="border-collapse:collapse;font-family:Arial;'
              'font-size:13px;">')
-
     # header row
     html += '<tr>'
     for col in df.columns:
@@ -253,33 +336,55 @@ def df_to_html(df, title):
                  f'padding:8px 12px;border:1px solid #dddddd;'
                  f'text-align:center;">{col}</th>')
     html += '</tr>'
-
     # data rows
     for _, row in df.iterrows():
         html += '<tr>'
         for col in df.columns:
             val = row[col]
             color = "#000000"
-            # "vs Last Month" column me arrow ke hisaab se green/red
             if "vs" in str(col).lower():
                 if "⬆️" in str(val):
-                    color = "#1a7f37"   # green (up)
+                    color = "#1a7f37"
                 elif "⬇️" in str(val):
-                    color = "#c0392b"   # red (down)
+                    color = "#c0392b"
             html += (f'<td style="padding:7px 12px;border:1px solid #dddddd;'
                      f'text-align:center;color:{color};">{val}</td>')
         html += '</tr>'
-
     html += '</table>'
     return html
 
 
-# ---- 3. EMAIL BODY BANAO ----
+# ---- PLAIN HTML TABLE (duration table ke liye, no color logic) ----
+def df_to_html_plain(df, title):
+    """Simple count table — teal header, bold Total column."""
+    html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
+    html += ('<table style="border-collapse:collapse;font-family:Arial;'
+             'font-size:13px;">')
+    html += '<tr>'
+    for col in df.columns:
+        html += (f'<th style="background:#028090;color:#ffffff;'
+                 f'padding:8px 12px;border:1px solid #dddddd;'
+                 f'text-align:center;">{col}</th>')
+    html += '</tr>'
+    last_col = df.columns[-1]
+    for _, row in df.iterrows():
+        html += '<tr>'
+        for col in df.columns:
+            bold = "font-weight:bold;" if col == last_col else ""
+            align = "left" if col == df.columns[0] else "center"
+            html += (f'<td style="padding:7px 12px;border:1px solid #dddddd;'
+                     f'text-align:{align};{bold}">{row[col]}</td>')
+        html += '</tr>'
+    html += '</table>'
+    return html
+
+
+# ---- EMAIL BODY ----
 _y_str  = yesterday.strftime("%d %b %Y")
 _m_str  = month_start.strftime("%d %b")
 _lm_str = f"{lm_start.strftime('%d %b')} – {lm_end.strftime('%d %b %Y')}"
 
-# Header samjhane wali short legend (report ke upar dikhegi)
+# Header glossary (professional English)
 legend_html = f'''
 <table style="border-collapse:collapse;font-family:Arial;font-size:12px;
               margin:6px 0 16px;background:#f4fbfa;border:1px solid #cfe8e6;">
@@ -333,6 +438,10 @@ breakdown and target progress.</p>
 
 {df_to_html(branch_df, f"Branch-wise Summary ({_m_str} – {yesterday.strftime('%d %b %Y')})")}
 
+<br>
+
+{df_to_html_plain(npd_mtd, f"New Plan Duration — MTD-1 ({_m_str} – {yesterday.strftime('%d %b')})")}
+
 <p style="margin-top:18px;">For quick reference, favourable movements appear in
 <span style="color:#1a7f37;"><b>green</b></span> and unfavourable ones in
 <span style="color:#c0392b;"><b>red</b></span>. Targets achieved are shown in green,
@@ -353,7 +462,7 @@ This is an automated report. Figures are based on data available up to
 </body></html>
 '''
 
-# ---- 4. EMAIL BHEJO ----
+# ---- EMAIL BHEJO ----
 msg = MIMEMultipart("alternative")
 msg["Subject"] = f"Overall Performance Report — {_y_str}"
 msg["From"] = GMAIL_USER
