@@ -157,8 +157,9 @@ print("Overall ready")
 
 # ====== 6. FORMAT ======
 TEAL={"red":0.18,"green":0.55,"blue":0.56}; WHITE={"red":1,"green":1,"blue":1}
-GRID={"red":0.55,"green":0.55,"blue":0.55}
+GRID={"red":0.3,"green":0.3,"blue":0.3}          # gehra grey (border zyada dikhe)
 G_TXT={"red":0.0,"green":0.5,"blue":0.0}; R_TXT={"red":0.8,"green":0.0,"blue":0.0}
+BORDER_STYLE="SOLID_MEDIUM"   # patli="SOLID", moti="SOLID_MEDIUM", sabse moti="SOLID_THICK"
 
 def replace_ws(title, df):
     try: sheet.del_worksheet(sheet.worksheet(title))
@@ -174,7 +175,7 @@ def base_format(sid, n_cols, n_rows, title_text):
     req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":1,"endRowIndex":2,"startColumnIndex":0,"endColumnIndex":n_cols},"cell":{"userEnteredFormat":{"backgroundColor":TEAL,"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE","textFormat":{"bold":True,"foregroundColor":WHITE},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat,wrapStrategy)"}})
     req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":2,"endRowIndex":2+n_rows,"startColumnIndex":0,"endColumnIndex":1},"cell":{"userEnteredFormat":{"horizontalAlignment":"LEFT","textFormat":{"bold":True}}},"fields":"userEnteredFormat(horizontalAlignment,textFormat)"}})
     req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":2,"endRowIndex":2+n_rows,"startColumnIndex":1,"endColumnIndex":n_cols},"cell":{"userEnteredFormat":{"horizontalAlignment":"CENTER"}},"fields":"userEnteredFormat.horizontalAlignment"}})
-    req.append({"updateBorders":{"range":{"sheetId":sid,"startRowIndex":0,"endRowIndex":2+n_rows,"startColumnIndex":0,"endColumnIndex":n_cols},"top":{"style":"SOLID","color":GRID},"bottom":{"style":"SOLID","color":GRID},"left":{"style":"SOLID","color":GRID},"right":{"style":"SOLID","color":GRID},"innerHorizontal":{"style":"SOLID","color":GRID},"innerVertical":{"style":"SOLID","color":GRID}}})
+    req.append({"updateBorders":{"range":{"sheetId":sid,"startRowIndex":0,"endRowIndex":2+n_rows,"startColumnIndex":0,"endColumnIndex":n_cols},"top":{"style":BORDER_STYLE,"color":GRID},"bottom":{"style":BORDER_STYLE,"color":GRID},"left":{"style":BORDER_STYLE,"color":GRID},"right":{"style":BORDER_STYLE,"color":GRID},"innerHorizontal":{"style":BORDER_STYLE,"color":GRID},"innerVertical":{"style":BORDER_STYLE,"color":GRID}}})
     req.append({"autoResizeDimensions":{"dimensions":{"sheetId":sid,"dimension":"COLUMNS","startIndex":0,"endIndex":n_cols}}})
     return req
 
@@ -288,8 +289,8 @@ def write_duration_block(ws, df, start_row, title_text):
     req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":hdr+1,"endRowIndex":hdr+1+nr,"startColumnIndex":1,"endColumnIndex":nc},"cell":{"userEnteredFormat":{"horizontalAlignment":"CENTER"}},"fields":"userEnteredFormat.horizontalAlignment"}})
     # Total column bold
     req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":hdr,"endRowIndex":hdr+1+nr,"startColumnIndex":nc-1,"endColumnIndex":nc},"cell":{"userEnteredFormat":{"textFormat":{"bold":True}}},"fields":"userEnteredFormat.textFormat"}})
-    # borders
-    req.append({"updateBorders":{"range":{"sheetId":sid,"startRowIndex":start_row,"endRowIndex":hdr+1+nr,"startColumnIndex":0,"endColumnIndex":nc},"top":{"style":"SOLID","color":GRID},"bottom":{"style":"SOLID","color":GRID},"left":{"style":"SOLID","color":GRID},"right":{"style":"SOLID","color":GRID},"innerHorizontal":{"style":"SOLID","color":GRID},"innerVertical":{"style":"SOLID","color":GRID}}})
+    # borders (mota — BORDER_STYLE)
+    req.append({"updateBorders":{"range":{"sheetId":sid,"startRowIndex":start_row,"endRowIndex":hdr+1+nr,"startColumnIndex":0,"endColumnIndex":nc},"top":{"style":BORDER_STYLE,"color":GRID},"bottom":{"style":BORDER_STYLE,"color":GRID},"left":{"style":BORDER_STYLE,"color":GRID},"right":{"style":BORDER_STYLE,"color":GRID},"innerHorizontal":{"style":BORDER_STYLE,"color":GRID},"innerVertical":{"style":BORDER_STYLE,"color":GRID}}})
     return req
 
 # tab banao (purana delete karke fresh)
@@ -309,7 +310,7 @@ print("New_Plan_Duration tab done")
 
 
 # ============================================================
-# 10. EMAIL — Overall + Branch report (HTML body)
+# 10. EMAIL — Overall + Branch + Duration report (HTML body)
 # ============================================================
 
 import smtplib
@@ -319,11 +320,19 @@ from email.mime.text import MIMEText
 GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
-# abhi test ke liye sirf khud ko; baad me team add karo
-RECIPIENTS = [GMAIL_USER]
+# === Yahan apni asli email IDs daalo ===
+TO = [
+    "tanmay@emoneeds.com",
+]
+CC = [
+    "neelesh@emoneeds.com",
+]
+BCC = [
+    "neeleshdwivedirgpv@gmail.com",
+]
 
 
-# ---- HTML TABLE HELPER (arrow colors ke saath) ----
+# ---- HTML TABLE HELPER (arrow colors ke saath, moti border) ----
 def df_to_html(df, title):
     """DataFrame ko styled HTML email table banao (teal header + arrow colors)."""
     html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
@@ -333,7 +342,7 @@ def df_to_html(df, title):
     html += '<tr>'
     for col in df.columns:
         html += (f'<th style="background:#028090;color:#ffffff;'
-                 f'padding:8px 12px;border:1px solid #dddddd;'
+                 f'padding:8px 12px;border:2px solid #555555;'
                  f'text-align:center;">{col}</th>')
     html += '</tr>'
     # data rows
@@ -347,7 +356,7 @@ def df_to_html(df, title):
                     color = "#1a7f37"
                 elif "⬇️" in str(val):
                     color = "#c0392b"
-            html += (f'<td style="padding:7px 12px;border:1px solid #dddddd;'
+            html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
                      f'text-align:center;color:{color};">{val}</td>')
         html += '</tr>'
     html += '</table>'
@@ -363,7 +372,7 @@ def df_to_html_plain(df, title):
     html += '<tr>'
     for col in df.columns:
         html += (f'<th style="background:#028090;color:#ffffff;'
-                 f'padding:8px 12px;border:1px solid #dddddd;'
+                 f'padding:8px 12px;border:2px solid #555555;'
                  f'text-align:center;">{col}</th>')
     html += '</tr>'
     last_col = df.columns[-1]
@@ -372,7 +381,7 @@ def df_to_html_plain(df, title):
         for col in df.columns:
             bold = "font-weight:bold;" if col == last_col else ""
             align = "left" if col == df.columns[0] else "center"
-            html += (f'<td style="padding:7px 12px;border:1px solid #dddddd;'
+            html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
                      f'text-align:{align};{bold}">{row[col]}</td>')
         html += '</tr>'
     html += '</table>'
@@ -462,15 +471,19 @@ This is an automated report. Figures are based on data available up to
 </body></html>
 '''
 
-# ---- EMAIL BHEJO ----
+# ---- EMAIL BHEJO (To / CC / BCC) ----
 msg = MIMEMultipart("alternative")
 msg["Subject"] = f"Overall Performance Report — {_y_str}"
 msg["From"] = GMAIL_USER
-msg["To"] = ", ".join(RECIPIENTS)
+msg["To"] = ", ".join(TO)
+msg["Cc"] = ", ".join(CC)          # BCC header me NAHI daalte (chhupa rehta hai)
 msg.attach(MIMEText(html_body, "html"))
+
+# sab recipients ek list me (To + CC + BCC) — actual delivery ke liye
+all_recipients = TO + CC + BCC
 
 with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
     server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-    server.sendmail(GMAIL_USER, RECIPIENTS, msg.as_string())
+    server.sendmail(GMAIL_USER, all_recipients, msg.as_string())
 
-print(f"Email bheji gayi: {', '.join(RECIPIENTS)}")
+print(f"Email bheji gayi — To: {len(TO)}, CC: {len(CC)}, BCC: {len(BCC)}")
