@@ -286,36 +286,38 @@ legend_html = f'''
   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">
       <b style="color:#07333B;">Yesterday</b></td>
       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">
-      {yesterday.strftime('%d %b %Y')} ki single-din performance</td></tr>
+      Single-day performance for {yesterday.strftime('%d %b %Y')}.</td></tr>
   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">
       <b style="color:#07333B;">MTD-1</b></td>
       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">
-      Month-To-Date — is mahine ki 1 tareekh se kal tak ka cumulative
-      ({_m_str} – {yesterday.strftime('%d %b')})</td></tr>
+      Month-to-Date — cumulative figures from the 1st of the month up to
+      yesterday ({_m_str} – {yesterday.strftime('%d %b')}).</td></tr>
   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">
       <b style="color:#07333B;">Last Month</b></td>
       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">
-      Pichhle mahine ka <i>same period</i> — fair comparison ke liye
-      ({_lm_str})</td></tr>
+      The same period in the previous month, shown for a fair like-for-like
+      comparison ({_lm_str}).</td></tr>
   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">
       <b style="color:#07333B;">vs Last Month</b></td>
       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">
-      MTD-1 ka pichhle mahine ke same period se change.
-      ⬆️ green = behtar, ⬇️ red = kam</td></tr>
+      Change in MTD-1 against the same period last month.
+      ⬆️ green = improvement, ⬇️ red = decline.</td></tr>
   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">
       <b style="color:#07333B;">Target / % Achieved / Pending&nbsp;%</b></td>
       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">
-      Mahine ka goal, MTD-1 tak kitna % poora hua, aur kitna % baaki</td></tr>
+      The monthly goal, the percentage achieved as of MTD-1, and the
+      percentage still remaining.</td></tr>
   <tr><td style="padding:6px 12px;"><b style="color:#07333B;">NO2P&nbsp;%</b></td>
-      <td style="padding:6px 12px;">New-OPD to New-Plan conversion —
-      kitne naye OPD patients ne plan liya (New&nbsp;Plan ÷ New&nbsp;OPD × 100)</td></tr>
+      <td style="padding:6px 12px;">New-OPD to New-Plan conversion rate — the
+      share of new OPD patients who enrolled in a plan
+      (New&nbsp;Plan ÷ New&nbsp;OPD × 100).</td></tr>
 </table>
 '''
 
 html_body = f'''
 <html><body style="font-family:Arial;color:#222;">
 
-<p>Dear Team,</p>
+<p>Dear Tanmay,</p>
 
 <p>Please find the <b>Overall Performance Report</b> for
 <b>{yesterday.strftime('%d %b %Y')}</b> below, covering both the single-day
