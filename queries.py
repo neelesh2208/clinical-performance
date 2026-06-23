@@ -111,7 +111,7 @@ SELECT * FROM (
         prpp.patient_ref_id,
         prpp.due_date DESC
 ) latest
-WHERE latest.due_date < '2026-06-16'
+WHERE latest.due_date <= CURRENT_DATE -1
 ORDER BY latest.due_date ASC;
 
 """
@@ -401,4 +401,67 @@ ORDER BY
     dr.task_type;
 
 """
+PLAN_TYPE_QUERY = """WITH classified AS (
+    SELECT
+        prpp.*,
+        CASE
+            WHEN LAG(prpp.due_date::date) OVER w IS NULL
+                THEN 'New Plan'
+            WHEN prpp.enrollment_date::date <= LAG(prpp.due_date::date) OVER w + INTERVAL '30 days'
+                THEN 'Renewal'
+            ELSE 'Revival'
+        END AS plan_type,
+        (
+            (EXTRACT(YEAR FROM AGE(prpp.due_date::date, prpp.enrollment_date::date)) * 12)
+          + EXTRACT(MONTH FROM AGE(prpp.due_date::date, prpp.enrollment_date::date))
+        ) AS plan_months
+    FROM public.patient_rpp_registration prpp
+    WINDOW w AS (PARTITION BY prpp.patient_id ORDER BY prpp.enrollment_date::date)
+),
+tenure AS (
+    SELECT
+        patient_id,
+        SUM(plan_months) AS total_service_months
+    FROM classified
+    GROUP BY patient_id
+)
+SELECT
+    pr.patient_name,
+    pr.hosp_name,
+    pr.lead_source,
+    pr.patient_ref_id,
+    prpp.amount,
+    prpp.package_price,
+    prpp.payment_type_name,
+    pr.mobile_number,
+    prpp.enrollment_date::date,
+    prpp.due_date::date,
+    pr.age,
+    pr.gender_name,
+    pr.family_type_name,
+    pr.socio_economic_status_name,
+    pr.marital_status_name,
+    pr.occupation,
+    pr.edu_name,
+    pr.state_id,
+    pr.district_id,
+    prpp.renewed,
+    prpp.psychologist_name,
+    prpp.psychiatrist_name,
+    prpp.plan_type,
+    t.total_service_months
+FROM classified prpp
+LEFT JOIN public.patient_registration pr
+    ON prpp.patient_id = pr.patient_id
+LEFT JOIN tenure t
+    ON t.patient_id = prpp.patient_id
+WHERE prpp.enrollment_date::date >= date_trunc('month', CURRENT_DATE)::date - INTERVAL '11 months'
+  AND pr.lead_source NOT IN ('CSR', 'Existing Client', 'Offline-Webinar', 'NVF')
+  AND NOT EXISTS (
+        SELECT 1
+        FROM public.patient_appointment pa
+        JOIN public.patient_csr_terms csr
+            ON csr.appointmentobjectid = pa._id
+        WHERE pa.patient_id = pr.patient_id
+  )"""
 
