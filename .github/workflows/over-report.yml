@@ -8,6 +8,7 @@ on:
 jobs:
   run-report:
     runs-on: ubuntu-latest
+    timeout-minutes: 20      # ek run 20 min se zyada atka to band (safety)
 
     steps:
       - name: Checkout repo
@@ -23,7 +24,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Overall Performance Report
+      - name: Run Overall Performance Report (auto-retry on failure)
+        uses: nick-fields/retry@v3
         env:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_NAME: ${{ secrets.DB_NAME }}
@@ -33,4 +35,8 @@ jobs:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-        run: python Over_Performance_Report.py
+        with:
+          timeout_minutes: 8        # ek koshish ki max time
+          max_attempts: 5           # 5 baar tak try karega
+          retry_wait_seconds: 120   # har fail ke baad 2 min ruk ke
+          command: python Over_Performance_Report.py
