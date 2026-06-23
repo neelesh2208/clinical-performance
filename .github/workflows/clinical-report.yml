@@ -2,8 +2,8 @@ name: Clinical Report to Google Sheets
 
 on:
   schedule:
-    # 2:30 AM UTC = 8:00 AM IST (roz)
-    - cron: "30 2 * * *"
+    # 5:30 AM UTC = 11:00 AM IST (roz)
+    - cron: "30 5 * * *"
   workflow_dispatch:        # manual run button
 
 jobs:
