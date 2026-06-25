@@ -2,7 +2,7 @@ name: Overall Performance Report
 
 on:
   schedule:
-    - cron: "30 4 * * *"   # 10:00 AM IST रोज
+    - cron: "37 4 * * *"   # 10:00 AM IST रोज
   workflow_dispatch:
 
 jobs:
