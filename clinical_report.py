@@ -482,7 +482,7 @@ GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
 # === Yahan apni asli email IDs daalo ===
 TO = [
-    "tanmay@emoneeds.com",
+    "neelesh@emoneeds.com",
 ]
 CC = [
     "neelesh@emoneeds.com",
