@@ -470,101 +470,102 @@ if _req:
     sheet.batch_update({"requests":_req})
 print(f"MTD_Performance tab banayi ({_m_start.strftime('%d-%m-%Y')} to {_y.strftime('%d-%m-%Y')})")
 
-# ============================================================
-# 5. EMAIL — Yesterday + MTD report (To / CC / BCC)
-# ============================================================
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-
-GMAIL_USER = os.environ.get("GMAIL_USER")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
-
-# === Yahan apni asli email IDs daalo ===
-TO = [
-    "neelesh@emoneeds.com",
-]
-CC = [
-    "neelesh@emoneeds.com",
-    
-]
-BCC = [
-    "neeleshdwivedirgpv@gmail.com",
-]
-
-def df_to_html(df, title, reverse_cols={"Inactive Client"}):
-    """DataFrame ko styled HTML table banao, green/red highlight ke saath."""
-    highlight_cols = ["NEW OPD","F/U OPD","Total OPD Done","RPP Suggested",
-                      "Convergation","Sessions Done","Active Client","Inactive Client"]
-    col_hi_lo = {}
-    for c in highlight_cols:
-        if c in df.columns:
-            nz = [v for v in df[c].tolist() if v != 0]
-            if nz:
-                hi, lo = max(nz), min(nz)
-                gv, rv = (lo, hi) if c in reverse_cols else (hi, lo)
-                col_hi_lo[c] = (gv, rv, hi, lo)
-
-    teal = "#2e8c8f"
-    html = f'''
-    <div style="font-family:Arial,sans-serif;">
-      <table style="border-collapse:collapse;width:100%;margin-bottom:25px;">
-        <tr><td colspan="{len(df.columns)}" style="background:{teal};color:#fff;
-            font-weight:bold;font-size:15px;text-align:center;padding:8px;
-            border:1px solid #888;">{title}</td></tr>
-        <tr>'''
-    for c in df.columns:
-        html += f'<th style="background:{teal};color:#fff;padding:6px 8px;border:1px solid #888;font-size:12px;">{c}</th>'
-    html += '</tr>'
-
-    for _, row in df.iterrows():
-        html += '<tr>'
-        for c in df.columns:
-            v = row[c]
-            bg = "#ffffff"
-            align = "center"
-            weight = "normal"
-            if c == "Therapist":
-                align = "left"; weight = "bold"
-            elif c in col_hi_lo:
-                gv, rv, hi, lo = col_hi_lo[c]
-                if v != 0 and v == gv:
-                    bg = "#b8e0b8"
-                elif v != 0 and v == rv and hi != lo:
-                    bg = "#f5c6c6"
-            html += (f'<td style="background:{bg};text-align:{align};font-weight:{weight};'
-                     f'padding:5px 8px;border:1px solid #888;font-size:12px;">{v}</td>')
-        html += '</tr>'
-    html += '</table></div>'
-    return html
-
-_y_str = yesterday.strftime("%d-%m-%Y")
-_m_str = _m_start.strftime("%d-%m-%Y")
-html_body = f'''
-<html><body>
-<p style="font-family:Arial;font-size:13px;">Dear Tanmay,<br><br>
-Please find below the Clinical Performance report for your review.<br><br>
-The report covers two views &mdash; <b>Yesterday's Performance</b> (therapist-wise activity for the previous day) and <b>Month-to-Date (MTD) Performance</b> (cumulative from the 1st of the month up to yesterday). Metrics include OPD (New/Follow-up), RPP suggestions, conversions, sessions conducted, and active/inactive clients.<br><br>
-For quick reference, the highest performer in each metric is highlighted in green and the lowest in red.</p>
-{df_to_html(summary, f"Yesterday({_y_str}) Clinical Performance")}
-{df_to_html(_mtd, f"MTD({_m_str} to {_y_str}) Clinical Performance")}
-<p style="font-family:Arial;font-size:12px;">This report is generated automatically and refreshes daily. Please let me know if you would like any additional metrics or a different breakdown.<br><br>
-Best regards,<br>
-Neelesh<br>
-Data Analyst, Emoneeds</p>
-</body></html>
-'''
-
-msg = MIMEMultipart("alternative")
-msg["Subject"] = f"Clinical Performance Report — {_y_str}"
-msg["From"] = GMAIL_USER
-msg["To"] = ", ".join(TO)
-msg["Cc"] = ", ".join(CC)
-msg.attach(MIMEText(html_body, "html"))
-
-all_recipients = TO + CC + BCC
-with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-    server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-    server.sendmail(GMAIL_USER, all_recipients, msg.as_string())
-
-print(f"Email bheji gayi: To={len(TO)}, Cc={len(CC)}, Bcc={len(BCC)}")
+# # ============================================================
+# # 5. EMAIL — Yesterday + MTD report (To / CC / BCC)
+# # ============================================================
+# import smtplib
+# from email.mime.multipart import MIMEMultipart
+# from email.mime.text import MIMEText
+#
+# GMAIL_USER = os.environ.get("GMAIL_USER")
+# GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
+#
+# # === Yahan apni asli email IDs daalo ===
+# TO = [
+#     "neelesh@emoneeds.com",
+# ]
+# CC = [
+#     "neelesh@emoneeds.com",
+#     
+# ]
+# BCC = [
+#     "neelesh@emoneeds.com",
+# ]
+#
+# def df_to_html(df, title, reverse_cols={"Inactive Client"}):
+#     """DataFrame ko styled HTML table banao, green/red highlight ke saath."""
+#     highlight_cols = ["NEW OPD","F/U OPD","Total OPD Done","RPP Suggested",
+#                       "Convergation","Sessions Done","Active Client","Inactive Client"]
+#     col_hi_lo = {}
+#     for c in highlight_cols:
+#         if c in df.columns:
+#             nz = [v for v in df[c].tolist() if v != 0]
+#             if nz:
+#                 hi, lo = max(nz), min(nz)
+#                 gv, rv = (lo, hi) if c in reverse_cols else (hi, lo)
+#                 col_hi_lo[c] = (gv, rv, hi, lo)
+#
+#     teal = "#2e8c8f"
+#     html = f'''
+#     <div style="font-family:Arial,sans-serif;">
+#       <table style="border-collapse:collapse;width:100%;margin-bottom:25px;">
+#         <tr><td colspan="{len(df.columns)}" style="background:{teal};color:#fff;
+#             font-weight:bold;font-size:15px;text-align:center;padding:8px;
+#             border:1px solid #888;">{title}</td></tr>
+#         <tr>'''
+#     for c in df.columns:
+#         html += f'<th style="background:{teal};color:#fff;padding:6px 8px;border:1px solid #888;font-size:12px;">{c}</th>'
+#     html += '</tr>'
+#
+#     for _, row in df.iterrows():
+#         html += '<tr>'
+#         for c in df.columns:
+#             v = row[c]
+#             bg = "#ffffff"
+#             align = "center"
+#             weight = "normal"
+#             if c == "Therapist":
+#                 align = "left"; weight = "bold"
+#             elif c in col_hi_lo:
+#                 gv, rv, hi, lo = col_hi_lo[c]
+#                 if v != 0 and v == gv:
+#                     bg = "#b8e0b8"
+#                 elif v != 0 and v == rv and hi != lo:
+#                     bg = "#f5c6c6"
+#             html += (f'<td style="background:{bg};text-align:{align};font-weight:{weight};'
+#                      f'padding:5px 8px;border:1px solid #888;font-size:12px;">{v}</td>')
+#         html += '</tr>'
+#     html += '</table></div>'
+#     return html
+#
+# _y_str = yesterday.strftime("%d-%m-%Y")
+# _m_str = _m_start.strftime("%d-%m-%Y")
+# html_body = f'''
+# <html><body>
+# <p style="font-family:Arial;font-size:13px;">Dear Tanmay,<br><br>
+# Please find below the Clinical Performance report for your review.<br><br>
+# The report covers two views &mdash; <b>Yesterday's Performance</b> (therapist-wise activity for the previous day) and <b>Month-to-Date (MTD) Performance</b> (cumulative from the 1st of the month up to yesterday). Metrics include OPD (New/Follow-up), RPP suggestions, conversions, sessions conducted, and active/inactive clients.<br><br>
+# For quick reference, the highest performer in each metric is highlighted in green and the lowest in red.</p>
+# {df_to_html(summary, f"Yesterday({_y_str}) Clinical Performance")}
+# {df_to_html(_mtd, f"MTD({_m_str} to {_y_str}) Clinical Performance")}
+# <p style="font-family:Arial;font-size:12px;">This report is generated automatically and refreshes daily. Please let me know if you would like any additional metrics or a different breakdown.<br><br>
+# Best regards,<br>
+# Neelesh<br>
+# Data Analyst, Emoneeds</p>
+# </body></html>
+# '''
+#
+# msg = MIMEMultipart("alternative")
+# msg["Subject"] = f"Clinical Performance Report — {_y_str}"
+# msg["From"] = GMAIL_USER
+# msg["To"] = ", ".join(TO)
+# msg["Cc"] = ", ".join(CC)
+# msg.attach(MIMEText(html_body, "html"))
+#
+# all_recipients = TO + CC + BCC
+# with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+#     server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+#     server.sendmail(GMAIL_USER, all_recipients, msg.as_string())
+#
+# print(f"Email bheji gayi: To={len(TO)}, Cc={len(CC)}, Bcc={len(BCC)}")
+#

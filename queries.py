@@ -15,6 +15,21 @@ month_ref AS (
         ) AS ref_date
     FROM months
 ),
+diagnosis_data AS (
+    SELECT DISTINCT ON (patient_id)
+        patient_id,
+        diagnosis_name,
+        primary_diagnosis,
+        date_updated
+    FROM public.patient_provision_diagnosis_treatment
+    ORDER BY patient_id, date_updated DESC NULLS LAST
+),
+plan_history AS (
+    SELECT
+        patient_rpp_id,
+        COUNT(*) OVER (PARTITION BY patient_id ORDER BY enrollment_date::date) AS months_with_us
+    FROM public.patient_rpp_registration
+),
 patient_records AS (
     SELECT DISTINCT ON (prpp.patient_ref_id, prpp.patient_rpp_id)
         pr.patient_name,
@@ -43,7 +58,13 @@ patient_records AS (
         pr.district_id,
         prpp.package_name,
         prpp.package_price,
-        'Regular' AS patient_type
+        'Regular' AS patient_type,
+        COALESCE(
+            dd.primary_diagnosis,
+            (SELECT string_agg(trim(both E' \n\t\r' from elem), ', ')
+             FROM jsonb_array_elements_text(dd.diagnosis_name) AS elem)
+        ) AS primary_diagnosis,
+        ph.months_with_us
     FROM public.patient_rpp_registration prpp
     INNER JOIN public.patient_registration pr
         ON prpp.patient_ref_id = pr.patient_ref_id
@@ -51,12 +72,16 @@ patient_records AS (
         ON prpp.patient_rpp_id = pra.patient_rpp_id
     LEFT JOIN public.patient_csr_terms csr
         ON prpp._id = csr.rppobjectid
+    LEFT JOIN diagnosis_data dd
+        ON dd.patient_id = pr.patient_id
+    LEFT JOIN plan_history ph
+        ON ph.patient_rpp_id = prpp.patient_rpp_id
     WHERE prpp.lead_source NOT IN 
           ('CSR', 'Existing Client', 'Offline-Webinar', 'NVF')
       AND csr.rppobjectid IS NULL
 )
 SELECT
-    TO_CHAR(m.month_start, 'Mon-YY') AS active_month,
+    m.month_start AS active_date,
     p.*
 FROM month_ref m
 INNER JOIN patient_records p
@@ -117,7 +142,6 @@ ORDER BY latest.due_date ASC;
 """
 
 PLAN_QUERY = """
-
 WITH filtered_rpp AS (
     SELECT *
     FROM public.patient_rpp_registration
@@ -190,7 +214,7 @@ SELECT
     direct_after_opd,
     patient_ref_id::bigint,
     months_with_us::bigint,
-    diagnosis,
+    primary_diagnosis,
     package_diagnosis_name,
     patient_type,
     induction_done
@@ -209,7 +233,11 @@ FROM (
         pp.patient_ref_id,
         pp.enrollment_date,
         pp.due_date,
-        COALESCE(dd.diagnosis_name::text, dd.primary_diagnosis::text, pp.package_diagnosis_name::text) AS diagnosis,
+        COALESCE(
+            dd.primary_diagnosis,
+            (SELECT string_agg(trim(both E' \n\t\r' from elem), ', ')
+             FROM jsonb_array_elements_text(dd.diagnosis_name) AS elem)
+        ) AS primary_diagnosis,
         pp.package_diagnosis_name,
         pp.months_with_us,
         pr.induction_done,
