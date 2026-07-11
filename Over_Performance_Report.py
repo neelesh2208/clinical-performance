@@ -404,133 +404,134 @@ reqc.append({"autoResizeDimensions":{"dimensions":{"sheetId":ws_c._properties["s
 sheet.batch_update({"requests": reqc})
 print("New_Plan_Duration (combined) tab done")
 
-# ====== 10. EMAIL ======
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-
-GMAIL_USER = os.environ.get("GMAIL_USER")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
-
-TO  = ["tanmay@emoneeds.com"]
-CC  = ["neelesh@emoneeds.com"]
-BCC = ["neeleshdwivedirgpv@gmail.com"]
-
-def df_to_html(df, title):
-    html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
-    html += '<table style="border-collapse:collapse;font-family:Arial;font-size:13px;">'
-    html += '<tr>'
-    for col in df.columns:
-        html += (f'<th style="background:#028090;color:#ffffff;padding:8px 12px;'
-                 f'border:2px solid #555555;text-align:center;">{col}</th>')
-    html += '</tr>'
-    last_idx = len(df) - 1
-    for ridx, (_, row) in enumerate(df.iterrows()):
-        rbg = "background:#e0f5f3;" if ridx == last_idx else ""
-        html += f'<tr style="{rbg}">'
-        for col in df.columns:
-            val = row[col]; color = "#000000"
-            if "vs" in str(col).lower():
-                if "⬆️" in str(val): color = "#1a7f37"
-                elif "⬇️" in str(val): color = "#c0392b"
-            bold = "font-weight:bold;" if ridx == last_idx else ""
-            html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
-                     f'text-align:center;color:{color};{bold}">{val}</td>')
-        html += '</tr>'
-    html += '</table>'
-    return html
-
-def comb_to_html(df, title):
-    html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
-    html += '<table style="border-collapse:collapse;font-family:Arial;font-size:13px;">'
-    html += '<tr>'
-    for col in df.columns:
-        html += (f'<th style="background:#028090;color:#ffffff;padding:8px 12px;'
-                 f'border:2px solid #555555;text-align:center;">{col}</th>')
-    html += '</tr>'
-    for _, row in df.iterrows():
-        html += '<tr>'
-        for i, col in enumerate(df.columns):
-            align="left" if i==0 else "center"
-            bold="font-weight:bold;" if col=="Total" else ""
-            html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
-                     f'text-align:{align};{bold}">{row[col]}</td>')
-        html += '</tr>'
-    html += '</table>'
-    return html
-
-_y_str  = yesterday.strftime("%d %b %Y")
-_m_str  = month_start.strftime("%d %b")
-_lm_str = f"{lm_start.strftime('%d %b')} – {lm_end.strftime('%d %b %Y')}"
-
-legend_html = f'''
-<table style="border-collapse:collapse;font-family:Arial;font-size:12px;
-              margin:6px 0 16px;background:#f4fbfa;border:1px solid #cfe8e6;">
-  <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Yesterday</b></td>
-      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Single-day performance for {yesterday.strftime('%d %b %Y')}.</td></tr>
-  <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">MTD-1</b></td>
-      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Month-to-Date — cumulative from the 1st up to yesterday ({_m_str} – {yesterday.strftime('%d %b')}).</td></tr>
-  <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Last Month</b></td>
-      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Same period last month for a like-for-like comparison ({_lm_str}).</td></tr>
-  <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">vs Last Month</b></td>
-      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Change in MTD-1 vs same period last month. ⬆️ green = improvement, ⬇️ red = decline.</td></tr>
-  <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Amount</b></td>
-      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">MTD-1 revenue for OPDs, New Plan, Renewals, Revivals & Assessments. OPD me 0 ko 1500 maana gaya.</td></tr>
-  <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Assessments</b></td>
-      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Assessments sheet se: count = Assessment's No. ka sum, amount = Cost ka sum.</td></tr>
-  <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Target / % Achieved / Pending&nbsp;%</b></td>
-      <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Monthly goal, % achieved as of MTD-1, % remaining.</td></tr>
-  <tr><td style="padding:6px 12px;"><b style="color:#07333B;">Revenue</b></td>
-      <td style="padding:6px 12px;">OPD + New Plan + Renewal + Revival + Assessments ka total, target.csv ke Revenue target se compare.</td></tr>
-</table>
-'''
-
-branch_html = ""
-for b in branches:
-    branch_html += df_to_html(branch_dfs[b], f"{b} — Summary ({_m_str} – {yesterday.strftime('%d %b %Y')})")
-    branch_html += "<br><br>"
-
-html_body = f'''
-<html><body style="font-family:Arial;color:#222;">
-<p>Dear Tanmay,</p>
-<p>Please find the <b>Overall Performance Report</b> for
-<b>{yesterday.strftime('%d %b %Y')}</b> below, with consolidated and branch-wise
-summaries, amounts, assessments, New Plan duration and revenue progress against target.</p>
-
-<p style="margin-bottom:4px;"><b style="color:#07333B;">How to read this report:</b></p>
-{legend_html}
-
-{df_to_html(overall_df, f"Overall Summary ({_m_str} – {yesterday.strftime('%d %b %Y')})")}
-<br><br>
-{branch_html}
-
-{comb_to_html(comb_mtd, f"New Plan Duration — MTD-1 ({_m_str} – {yesterday.strftime('%d %b')})")}
-
-<p style="margin-top:8px;">Favourable movements appear in
-<span style="color:#1a7f37;"><b>green</b></span>, unfavourable in
-<span style="color:#c0392b;"><b>red</b></span>. The Revenue row totals OPD, New Plan,
-Renewal, Revival and Assessment amounts.</p>
-
-<p>This report is generated automatically and refreshes every day.</p>
-
-<p>Best regards,<br><b>Neelesh</b><br>Data Analyst, Emoneeds</p>
-
-<p style="font-family:Arial;font-size:11px;color:#999;border-top:1px solid #eee;
-          padding-top:8px;margin-top:14px;">
-This is an automated report. Figures are based on data up to {yesterday.strftime('%d %b %Y')}.</p>
-</body></html>
-'''
-
-msg = MIMEMultipart("alternative")
-msg["Subject"] = f"Overall Performance Report — {_y_str}"
-msg["From"] = GMAIL_USER
-msg["To"]  = ", ".join(TO)
-msg["Cc"]  = ", ".join(CC)
-msg.attach(MIMEText(html_body, "html"))
-
-all_recipients = TO + CC + BCC
-with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-    server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-    server.sendmail(GMAIL_USER, all_recipients, msg.as_string())
-
-print(f"Email bheji gayi — To: {len(TO)}, CC: {len(CC)}, BCC: {len(BCC)}")
+# # ====== 10. EMAIL ======
+# import smtplib
+# from email.mime.multipart import MIMEMultipart
+# from email.mime.text import MIMEText
+#
+# GMAIL_USER = os.environ.get("GMAIL_USER")
+# GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
+#
+# TO  = [""]
+# CC  = ["neelesh@emoneeds.com"]
+# BCC = ["neelesh@emoneeds.com"]
+#
+# def df_to_html(df, title):
+#     html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
+#     html += '<table style="border-collapse:collapse;font-family:Arial;font-size:13px;">'
+#     html += '<tr>'
+#     for col in df.columns:
+#         html += (f'<th style="background:#028090;color:#ffffff;padding:8px 12px;'
+#                  f'border:2px solid #555555;text-align:center;">{col}</th>')
+#     html += '</tr>'
+#     last_idx = len(df) - 1
+#     for ridx, (_, row) in enumerate(df.iterrows()):
+#         rbg = "background:#e0f5f3;" if ridx == last_idx else ""
+#         html += f'<tr style="{rbg}">'
+#         for col in df.columns:
+#             val = row[col]; color = "#000000"
+#             if "vs" in str(col).lower():
+#                 if "⬆️" in str(val): color = "#1a7f37"
+#                 elif "⬇️" in str(val): color = "#c0392b"
+#             bold = "font-weight:bold;" if ridx == last_idx else ""
+#             html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
+#                      f'text-align:center;color:{color};{bold}">{val}</td>')
+#         html += '</tr>'
+#     html += '</table>'
+#     return html
+#
+# def comb_to_html(df, title):
+#     html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
+#     html += '<table style="border-collapse:collapse;font-family:Arial;font-size:13px;">'
+#     html += '<tr>'
+#     for col in df.columns:
+#         html += (f'<th style="background:#028090;color:#ffffff;padding:8px 12px;'
+#                  f'border:2px solid #555555;text-align:center;">{col}</th>')
+#     html += '</tr>'
+#     for _, row in df.iterrows():
+#         html += '<tr>'
+#         for i, col in enumerate(df.columns):
+#             align="left" if i==0 else "center"
+#             bold="font-weight:bold;" if col=="Total" else ""
+#             html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
+#                      f'text-align:{align};{bold}">{row[col]}</td>')
+#         html += '</tr>'
+#     html += '</table>'
+#     return html
+#
+# _y_str  = yesterday.strftime("%d %b %Y")
+# _m_str  = month_start.strftime("%d %b")
+# _lm_str = f"{lm_start.strftime('%d %b')} – {lm_end.strftime('%d %b %Y')}"
+#
+# legend_html = f'''
+# <table style="border-collapse:collapse;font-family:Arial;font-size:12px;
+#               margin:6px 0 16px;background:#f4fbfa;border:1px solid #cfe8e6;">
+#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Yesterday</b></td>
+#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Single-day performance for {yesterday.strftime('%d %b %Y')}.</td></tr>
+#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">MTD-1</b></td>
+#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Month-to-Date — cumulative from the 1st up to yesterday ({_m_str} – {yesterday.strftime('%d %b')}).</td></tr>
+#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Last Month</b></td>
+#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Same period last month for a like-for-like comparison ({_lm_str}).</td></tr>
+#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">vs Last Month</b></td>
+#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Change in MTD-1 vs same period last month. ⬆️ green = improvement, ⬇️ red = decline.</td></tr>
+#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Amount</b></td>
+#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">MTD-1 revenue for OPDs, New Plan, Renewals, Revivals & Assessments. OPD me 0 ko 1500 maana gaya.</td></tr>
+#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Assessments</b></td>
+#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Assessments sheet se: count = Assessment's No. ka sum, amount = Cost ka sum.</td></tr>
+#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Target / % Achieved / Pending&nbsp;%</b></td>
+#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Monthly goal, % achieved as of MTD-1, % remaining.</td></tr>
+#   <tr><td style="padding:6px 12px;"><b style="color:#07333B;">Revenue</b></td>
+#       <td style="padding:6px 12px;">OPD + New Plan + Renewal + Revival + Assessments ka total, target.csv ke Revenue target se compare.</td></tr>
+# </table>
+# '''
+#
+# branch_html = ""
+# for b in branches:
+#     branch_html += df_to_html(branch_dfs[b], f"{b} — Summary ({_m_str} – {yesterday.strftime('%d %b %Y')})")
+#     branch_html += "<br><br>"
+#
+# html_body = f'''
+# <html><body style="font-family:Arial;color:#222;">
+# <p>Dear Tanmay,</p>
+# <p>Please find the <b>Overall Performance Report</b> for
+# <b>{yesterday.strftime('%d %b %Y')}</b> below, with consolidated and branch-wise
+# summaries, amounts, assessments, New Plan duration and revenue progress against target.</p>
+#
+# <p style="margin-bottom:4px;"><b style="color:#07333B;">How to read this report:</b></p>
+# {legend_html}
+#
+# {df_to_html(overall_df, f"Overall Summary ({_m_str} – {yesterday.strftime('%d %b %Y')})")}
+# <br><br>
+# {branch_html}
+#
+# {comb_to_html(comb_mtd, f"New Plan Duration — MTD-1 ({_m_str} – {yesterday.strftime('%d %b')})")}
+#
+# <p style="margin-top:8px;">Favourable movements appear in
+# <span style="color:#1a7f37;"><b>green</b></span>, unfavourable in
+# <span style="color:#c0392b;"><b>red</b></span>. The Revenue row totals OPD, New Plan,
+# Renewal, Revival and Assessment amounts.</p>
+#
+# <p>This report is generated automatically and refreshes every day.</p>
+#
+# <p>Best regards,<br><b>Neelesh</b><br>Data Analyst, Emoneeds</p>
+#
+# <p style="font-family:Arial;font-size:11px;color:#999;border-top:1px solid #eee;
+#           padding-top:8px;margin-top:14px;">
+# This is an automated report. Figures are based on data up to {yesterday.strftime('%d %b %Y')}.</p>
+# </body></html>
+# '''
+#
+# msg = MIMEMultipart("alternative")
+# msg["Subject"] = f"Overall Performance Report — {_y_str}"
+# msg["From"] = GMAIL_USER
+# msg["To"]  = ", ".join(TO)
+# msg["Cc"]  = ", ".join(CC)
+# msg.attach(MIMEText(html_body, "html"))
+#
+# all_recipients = TO + CC + BCC
+# with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+#     server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+#     server.sendmail(GMAIL_USER, all_recipients, msg.as_string())
+#
+# print(f"Email bheji gayi — To: {len(TO)}, CC: {len(CC)}, BCC: {len(BCC)}")
+#
