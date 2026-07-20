@@ -97,7 +97,7 @@ active = data["active"].copy(); inactive = data["inactive"].copy()
 opd["opd_date"] = pd.to_datetime(opd["opd_date"], errors="coerce").dt.date
 plan["enrollment_date"] = pd.to_datetime(plan["enrollment_date"], errors="coerce").dt.date
 inactive["inactive_date"] = pd.to_datetime(inactive["inactive_date"], errors="coerce").dt.date
-active_df["active_month_dt"] = pd.to_datetime(active_df["active_date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+active["active_month_dt"] = pd.to_datetime(active["active_date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
 # ---- AMOUNT cleanup ----
 opd["amount"] = pd.to_numeric(opd["amount"], errors="coerce").fillna(0)
 opd.loc[opd["amount"] == 0, "amount"] = 1500
