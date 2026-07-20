@@ -390,7 +390,7 @@ _conv_grp = _cr.groupby("therapist").size().reset_index(name="convergation")
 
 _active["active_month_dt"] = pd.to_datetime(_active["active_month"], format="%b-%y", errors="coerce")
 _cur = pd.Timestamp(_m_start)
-_act_m = _active[_active["active_month_dt"] == _cur].copy()
+_active["active_month_dt"] = pd.to_datetime(_active["active_date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
 _a1 = _act_m.assign(therapist=_act_m["psychologist_name"].apply(map_final))
 _a2 = _act_m.assign(therapist=_act_m["psychiatrist_name"].apply(map_final))
 _act_long = pd.concat([_a1[["therapist"]], _a2[["therapist"]]], ignore_index=True)
