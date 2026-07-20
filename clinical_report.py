@@ -186,7 +186,7 @@ conv_rows = conv_rows.drop_duplicates(subset=["patient_ref_id", "therapist"])
 conv_grp = conv_rows.groupby("therapist").size().reset_index(name="convergation")
 
 # D. Active count — current month (psychologist + psychiatrist)
-active_df["active_month_dt"] = pd.to_datetime(active_df["active_month"], format="%b-%y", errors="coerce")
+active_df["active_month_dt"] = pd.to_datetime(active_df["active_date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
 cur = pd.Timestamp(month_start)
 act_m = active_df[active_df["active_month_dt"] == cur].copy()
 a1 = act_m.assign(therapist=act_m["psychologist_name"].apply(map_final))
