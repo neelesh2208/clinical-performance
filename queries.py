@@ -217,7 +217,8 @@ SELECT
     primary_diagnosis,
     package_diagnosis_name,
     patient_type,
-    induction_done
+    induction_done,
+    amount
 FROM (
     SELECT
         pr.patient_id,
@@ -241,6 +242,7 @@ FROM (
         pp.package_diagnosis_name,
         pp.months_with_us,
         pr.induction_done,
+        pp.amount,
 
         CASE
             WHEN pp.prev_enrollment IS NULL THEN 'NEW PLAN'
@@ -302,7 +304,6 @@ FROM (
 WHERE rn = 1
 AND enrollment_date::date >= date_trunc('month', CURRENT_DATE) - INTERVAL '12 months'
 AND enrollment_date::date <= CURRENT_DATE;
-
 """
 
 OPD_QUERY = """ SELECT *
