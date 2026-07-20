@@ -263,6 +263,9 @@ FROM (
 
         CASE
             WHEN pr.lead_source = 'Corporate' THEN 'Corporate'
+            WHEN pr.lead_source = 'NTPC' THEN 'CSR'
+            WHEN pr.lead_source = 'CSR' AND pp.amount = 0 THEN 'CSR'
+            WHEN pr.lead_source = 'Existing Client' AND pp.amount = 0 THEN 'CSR'
             WHEN pr.csr_id IS NULL OR pr.csr_id = 'regular' THEN 'Regular'
             ELSE 'CSR'
         END AS patient_type,
