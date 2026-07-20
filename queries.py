@@ -145,7 +145,7 @@ PLAN_QUERY = """
 WITH filtered_rpp AS (
     SELECT *
     FROM public.patient_rpp_registration
-    WHERE enrollment_date::date >= date_trunc('month', CURRENT_DATE) - INTERVAL '8 months'
+    WHERE enrollment_date::date >= date_trunc('month', CURRENT_DATE) - INTERVAL '12 months'
       AND enrollment_date::date <= CURRENT_DATE
 ),
 
@@ -245,7 +245,7 @@ FROM (
         CASE
             WHEN pp.prev_enrollment IS NULL THEN 'NEW PLAN'
             WHEN pp.enrollment_date::date <= pp.prev_due THEN 'RENEWAL'
-            WHEN pp.enrollment_date::date <= pp.prev_due + INTERVAL '30 days'
+            WHEN pp.enrollment_date::date <= pp.prev_due + INTERVAL '45 days'
                 THEN 'LATE RENEWAL'
             ELSE 'REVIVAL'
         END AS plan_status,
@@ -300,7 +300,7 @@ FROM (
         AND LOWER(pr.patient_name) NOT LIKE '%test'
 ) t
 WHERE rn = 1
-AND enrollment_date::date >= date_trunc('month', CURRENT_DATE) - INTERVAL '8 months'
+AND enrollment_date::date >= date_trunc('month', CURRENT_DATE) - INTERVAL '12 months'
 AND enrollment_date::date <= CURRENT_DATE;
 
 """
@@ -357,7 +357,7 @@ FROM (
         AND prev.appointment_date < pa.appointment_date::date
     LEFT JOIN public.patient_csr_terms csr
         ON csr.appointmentobjectid = pa._id
-    WHERE pa.appointment_date::date >= date_trunc('month', CURRENT_DATE)::date - INTERVAL '11 months'
+    WHERE pa.appointment_date::date >= date_trunc('month', CURRENT_DATE)::date - INTERVAL '12 months'
       AND pa.appointment_date::date <= CURRENT_DATE
       AND pa.appointment_time_slot <> ''
       AND pa.appointment_status IN (1,5)
@@ -436,7 +436,7 @@ PLAN_TYPE_QUERY = """WITH classified AS (
         CASE
             WHEN LAG(prpp.due_date::date) OVER w IS NULL
                 THEN 'New Plan'
-            WHEN prpp.enrollment_date::date <= LAG(prpp.due_date::date) OVER w + INTERVAL '30 days'
+            WHEN prpp.enrollment_date::date <= LAG(prpp.due_date::date) OVER w + INTERVAL '45 days'
                 THEN 'Renewal'
             ELSE 'Revival'
         END AS plan_type,
@@ -484,7 +484,7 @@ LEFT JOIN public.patient_registration pr
     ON prpp.patient_id = pr.patient_id
 LEFT JOIN tenure t
     ON t.patient_id = prpp.patient_id
-WHERE prpp.enrollment_date::date >= date_trunc('month', CURRENT_DATE)::date - INTERVAL '11 months'
+WHERE prpp.enrollment_date::date >= date_trunc('month', CURRENT_DATE)::date - INTERVAL '12 months'
   AND pr.lead_source NOT IN ('CSR', 'Existing Client', 'Offline-Webinar', 'NVF')
   AND NOT EXISTS (
         SELECT 1
