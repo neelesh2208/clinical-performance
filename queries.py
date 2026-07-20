@@ -11,7 +11,7 @@ month_ref AS (
         month_start,
         LEAST(
             (month_start + INTERVAL '1 month - 1 day')::date,
-            CURRENT_DATE
+            CURRENT_DATE - 1
         ) AS ref_date
     FROM months
 ),
@@ -79,7 +79,6 @@ patient_records AS (
     WHERE prpp.lead_source NOT IN 
           ('CSR', 'Existing Client', 'Offline-Webinar', 'NVF')
       AND csr.rppobjectid IS NULL
-      AND pra.status NOT IN ('Expired')
 )
 SELECT
     m.month_start AS active_date,
