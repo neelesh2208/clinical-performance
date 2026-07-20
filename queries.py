@@ -2,7 +2,7 @@ ACTIVE_QUERY = """
 WITH months AS (
     SELECT generate_series(
         DATE '2025-07-01',
-        DATE '2026-06-01',
+        date_trunc('month', CURRENT_DATE)::date,
         INTERVAL '1 month'
     )::date AS month_start
 ),
@@ -311,6 +311,7 @@ FROM (
         pr.patient_name,
         pr.hosp_name,
         pr.lead_source,
+        pr.patient_id,
         pr.patient_ref_id,
         pr.amount,
         pa.assigned_to_name,
