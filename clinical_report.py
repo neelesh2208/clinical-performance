@@ -5,6 +5,10 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from urllib.parse import quote_plus
 
+import requests as _http   # 'requests' aage list ban jata hai (formatting), isliye API ke liye alag alias
+from datetime import date, datetime, timezone
+
+
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import set_with_dataframe
@@ -470,6 +474,130 @@ if _req:
     sheet.batch_update({"requests":_req})
 print(f"MTD_Performance tab banayi ({_m_start.strftime('%d-%m-%Y')} to {_y.strftime('%d-%m-%Y')})")
 
+
+# ============================================================
+# MASTER_DATA Lead — API se patient master data (last 12 month + current month)
+# ============================================================
+
+API_URL = "https://api-v2-report.emoneeds.com/api/v1/reports/patient-reports/master-data"
+PAGE_LIMIT = 500          # ek page me kitne records (bada = kam requests)
+MAX_PAGES  = 200          # safety cap (500*200 = 1 lakh tak, kaafi hai)
+
+# ---- 12-month window ka cutoff ----
+# aaj se 12 mahine peeche wale mahine ki 1 tareekh (yaani ~13 mahine ka rolling window)
+# (stdlib se — koi dateutil install nahi chahiye)
+_today = date.today()
+_cy, _cm = _today.year, _today.month
+# 12 mahine peeche = pichhle saal ka same mahina, us mahine ki 1 tareekh
+_cutoff = date(_cy - 1, _cm, 1)
+print(f"Master_Data: cutoff = {_cutoff} (isse purane records skip)")
+
+def _parse_dt(s):
+    """ISO string -> date (timezone-safe)."""
+    if not s:
+        return None
+    try:
+        # '2026-07-20T09:20:07.302Z' jaisा format
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00")).date()
+    except Exception:
+        return None
+
+def _flatten(val):
+    """assignments/package jaisा nested field ko readable text banao."""
+    if val is None or val == "" or val == []:
+        return ""
+    if isinstance(val, (str, int, float)):
+        return str(val)
+    if isinstance(val, dict):
+        # dict me se 'name' jaisा field pehle, warna saari values join
+        for key in ("name", "title", "packageName", "label"):
+            if val.get(key):
+                return str(val[key])
+        return ", ".join(str(v) for v in val.values() if v not in (None, "", []))
+    if isinstance(val, list):
+        # list of dicts/strings -> har item ko flatten karke comma-join
+        parts = [_flatten(item) for item in val]
+        return ", ".join(p for p in parts if p)
+    return str(val)
+
+# ---- pagination: newest-first data, cutoff aane tak fetch ----
+# NOTE: yahan _http.get use ho raha hai (requests module), kyunki 'requests'
+# upar formatting ke liye list ban chuka hai. Isliye alias _http.
+all_rows = []
+_md_stop = False
+for _md_page in range(1, MAX_PAGES + 1):
+    try:
+        _md_resp = _http.get(API_URL, params={"page": _md_page, "limit": PAGE_LIMIT}, timeout=60)
+        _md_resp.raise_for_status()
+        _md_payload = _md_resp.json()
+    except Exception as e:
+        print(f"Master_Data: API error page {_md_page} ({e}) — jitna aaya usi se aage")
+        break
+
+    if not isinstance(_md_payload, dict):
+        print(f"Master_Data: unexpected payload type {type(_md_payload).__name__} — ruk gaye")
+        break
+    _md_rows = _md_payload.get("data", [])
+    if not _md_rows:
+        break
+
+    for _md_r in _md_rows:
+        if not isinstance(_md_r, dict):
+            continue
+        _md_cdt = _parse_dt(_md_r.get("createdAt"))
+        if _md_cdt is None:
+            continue
+        if _md_cdt < _cutoff:
+            # newest-first hai, to yahan se sab purane -> ruk jao
+            _md_stop = True
+            break
+        all_rows.append({
+            "Lead Source":    _md_r.get("leadSource", ""),
+            "Created At":      _md_cdt.strftime("%Y-%m-%d"),
+            "Package":         _flatten(_md_r.get("package")),
+            "Assignments":     _flatten(_md_r.get("assignments")),
+            "Months With Us":  _md_r.get("monthsWithUs", ""),
+        })
+
+    _md_meta = _md_payload.get("meta", {}) or {}
+    if _md_stop or not _md_meta.get("hasNextPage", False):
+        break
+
+print(f"Master_Data: {len(all_rows)} records (last 12 month + current)")
+
+# ---- DataFrame + Master_Data tab (replace, duplicate na ho) ----
+master_df = pd.DataFrame(all_rows, columns=[
+    "Lead Source","Created At","Package","Assignments","Months With Us"])
+
+# tab replace (fresh) — snapshot data, isliye replace (append nahi -> duplicate se bacha)
+try:
+    sheet.del_worksheet(sheet.worksheet("Master_Data"))
+except gspread.exceptions.WorksheetNotFound:
+    pass
+ws_master = sheet.add_worksheet(title="Master_Data",
+                                rows=str(len(master_df) + 10),
+                                cols=str(len(master_df.columns) + 2))
+set_with_dataframe(ws_master, master_df)
+
+# header formatting (teal) — baaki tabs jaisा
+sid_m = ws_master._properties["sheetId"]
+TEAL_M = {"red":0.18,"green":0.55,"blue":0.56}
+WHITE_M = {"red":1,"green":1,"blue":1}
+GRID_M = {"red":0.3,"green":0.3,"blue":0.3}
+ncm = len(master_df.columns); nrm = len(master_df)
+sheet.batch_update({"requests":[
+    {"repeatCell":{"range":{"sheetId":sid_m,"startRowIndex":0,"endRowIndex":1,"startColumnIndex":0,"endColumnIndex":ncm},
+     "cell":{"userEnteredFormat":{"backgroundColor":TEAL_M,"horizontalAlignment":"CENTER","textFormat":{"bold":True,"foregroundColor":WHITE_M}}},
+     "fields":"userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)"}},
+    {"updateBorders":{"range":{"sheetId":sid_m,"startRowIndex":0,"endRowIndex":1+nrm,"startColumnIndex":0,"endColumnIndex":ncm},
+     "top":{"style":"SOLID","color":GRID_M},"bottom":{"style":"SOLID","color":GRID_M},
+     "left":{"style":"SOLID","color":GRID_M},"right":{"style":"SOLID","color":GRID_M},
+     "innerHorizontal":{"style":"SOLID","color":GRID_M},"innerVertical":{"style":"SOLID","color":GRID_M}}},
+    {"autoResizeDimensions":{"dimensions":{"sheetId":sid_m,"dimension":"COLUMNS","startIndex":0,"endIndex":ncm}}},
+    {"updateSheetProperties":{"properties":{"sheetId":sid_m,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
+]})
+print(f"Master_Data tab done ({len(master_df)} rows)")
+
 # # ============================================================
 # # 5. EMAIL — Yesterday + MTD report (To / CC / BCC)
 # # ============================================================
@@ -486,7 +614,7 @@ print(f"MTD_Performance tab banayi ({_m_start.strftime('%d-%m-%Y')} to {_y.strft
 # ]
 # CC = [
 #     "neelesh@emoneeds.com",
-#     
+#
 # ]
 # BCC = [
 #     "neelesh@emoneeds.com",
@@ -568,4 +696,3 @@ print(f"MTD_Performance tab banayi ({_m_start.strftime('%d-%m-%Y')} to {_y.strft
 #     server.sendmail(GMAIL_USER, all_recipients, msg.as_string())
 #
 # print(f"Email bheji gayi: To={len(TO)}, Cc={len(CC)}, Bcc={len(BCC)}")
-#

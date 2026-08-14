@@ -98,6 +98,7 @@ opd["opd_date"] = pd.to_datetime(opd["opd_date"], errors="coerce").dt.date
 plan["enrollment_date"] = pd.to_datetime(plan["enrollment_date"], errors="coerce").dt.date
 inactive["inactive_date"] = pd.to_datetime(inactive["inactive_date"], errors="coerce").dt.date
 active["active_month_dt"] = pd.to_datetime(active["active_date"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+
 # ---- AMOUNT cleanup ----
 opd["amount"] = pd.to_numeric(opd["amount"], errors="coerce").fillna(0)
 opd.loc[opd["amount"] == 0, "amount"] = 1500
@@ -246,6 +247,108 @@ Y_COL=f"Yesterday ({y_str})"; M_COL=f"MTD-1 ({mtd_str})"; LM_COL=f"Last Month ({
 overall_df, ov_vs, ov_tgt = build_df(opd,plan,active,inactive,assess_df,"Overall",Y_COL,M_COL,LM_COL)
 print("Overall ready")
 
+# ---- working days (Sunday chhod ke) — MTD-1 target ke liye ----
+def _working_days(d1, d2):
+    """d1..d2 (inclusive) me Sunday chhod ke kitne din."""
+    if d2 < d1:
+        return 0
+    cnt = 0; cur = d1
+    while cur <= d2:
+        if cur.weekday() != 6:   # 6 = Sunday
+            cnt += 1
+        cur += timedelta(days=1)
+    return cnt
+
+# mahine ke total working din (poora mahina) aur ab tak (kal tak) ke working din
+_days_in_month = calendar.monthrange(month_start.year, month_start.month)[1]
+_month_end = month_start.replace(day=_days_in_month)
+_wd_total = _working_days(month_start, _month_end)          # poore mahine ke working din
+_wd_sofar = _working_days(month_start, yesterday)           # 1 se kal tak ke working din
+_mtd_ratio = (_wd_sofar / _wd_total) if _wd_total else 0
+print(f"Working days: {_wd_sofar}/{_wd_total} (Sunday chhod ke), MTD ratio={_mtd_ratio:.2f}")
+
+# ---- BEST MONTH benchmark (har category ka apna best) ----
+# Jan-2026 se har purane mahine ka "pehle _wd_sofar working-din tak" ka data,
+# har category ka MAX = us category ka best-month benchmark (fair same-period).
+BEST_FROM = date(2026, 1, 1)   # yahi se best dhoondo
+
+def _nth_working_day_date(m_start, n):
+    """Mahine ki 1 tareekh se n-va working din (Sunday chhod ke) ki date."""
+    if n <= 0:
+        return m_start
+    cnt = 0; cur = m_start
+    last = cur
+    _dim = calendar.monthrange(m_start.year, m_start.month)[1]
+    _mend = m_start.replace(day=_dim)
+    while cur <= _mend:
+        if cur.weekday() != 6:
+            cnt += 1; last = cur
+            if cnt >= n:
+                return cur
+        cur += timedelta(days=1)
+    return last  # agar mahine me utne working din nahi to aakhri
+
+def compute_best_month(opd_f, plan_f, active_f, inactive_f, assess_f):
+    """Har category ka best-month: same-period aur full-month, saath me kaunsa month tha (naam)."""
+    best_sp = {c: 0 for c in CATEGORIES}; best_sp_m = {c: "" for c in CATEGORIES}
+    best_fm = {c: 0 for c in CATEGORIES}; best_fm_m = {c: "" for c in CATEGORIES}
+    m = BEST_FROM
+    while m < month_start:
+        _dim = calendar.monthrange(m.year, m.month)[1]
+        _mend = m.replace(day=_dim)
+        _sp_end = _nth_working_day_date(m, _wd_sofar)
+        _mname = m.strftime("%b-%y")   # jaise Mar-26
+        rr_sp, _a = count_range(opd_f, plan_f, active_f, inactive_f, assess_f,
+                                m, _sp_end, pd.Timestamp(m))
+        rr_fm, _a2 = count_range(opd_f, plan_f, active_f, inactive_f, assess_f,
+                                 m, _mend, pd.Timestamp(m))
+        for c in CATEGORIES:
+            if rr_sp.get(c, 0) > best_sp[c]:
+                best_sp[c] = rr_sp[c]; best_sp_m[c] = _mname
+            if rr_fm.get(c, 0) > best_fm[c]:
+                best_fm[c] = rr_fm[c]; best_fm_m[c] = _mname
+        if m.month == 12:
+            m = date(m.year + 1, 1, 1)
+        else:
+            m = date(m.year, m.month + 1, 1)
+    return best_sp, best_fm, best_sp_m, best_fm_m
+
+# ---- Overall table: Category | Total Target | MTD-1 Target | Best Month | Achieved ----
+# graphs ke liye alag se overall ke achieved + dono best store karte hain
+OV_ACHIEVED = {}; OV_BEST_SP = {}; OV_BEST_FM = {}
+OV_BEST_SP_M = {}; OV_BEST_FM_M = {}   # kaunsa month best tha (naam)
+
+def build_target_vs_achieved(opd_f, plan_f, active_f, inactive_f, assess_f, scope_name, _store=False):
+    """MTD achieved vs Total Target, MTD-1 Target (Sunday-adj), aur Best Month (same-period)."""
+    r, _amt = count_range(opd_f, plan_f, active_f, inactive_f, assess_f,
+                          month_start, yesterday, pd.Timestamp(month_start))
+    best_sp, best_fm, best_sp_m, best_fm_m = compute_best_month(opd_f, plan_f, active_f, inactive_f, assess_f)
+    if _store:
+        for c in CATEGORIES:
+            OV_ACHIEVED[c] = r.get(c, 0)
+            OV_BEST_SP[c]  = best_sp.get(c, 0);  OV_BEST_SP_M[c] = best_sp_m.get(c, "")
+            OV_BEST_FM[c]  = best_fm.get(c, 0);  OV_BEST_FM_M[c] = best_fm_m.get(c, "")
+    lm_active = last_month_active_count(active_f)
+    rows = []; tgt_colors = []
+    for cat in CATEGORIES:
+        if cat in PCT_ROWS:
+            continue
+        ach = r[cat]
+        bm = best_sp.get(cat, 0)
+        tgt = get_target(scope_name, cat, lm_active)
+        if tgt is None:
+            rows.append([cat, "", "", bm, ach]); tgt_colors.append("none")
+        else:
+            mtd_tgt = int(round(tgt * _mtd_ratio))
+            rows.append([cat, tgt, mtd_tgt, bm, ach])
+            tgt_colors.append("green" if ach >= mtd_tgt else "red")
+    df = pd.DataFrame(rows, columns=["Category","Total Target","MTD-1 Target","Best Month","Achieved"])
+    return df, tgt_colors
+
+overall_simple, ov_simple_c = build_target_vs_achieved(
+    opd, plan, active, inactive, assess_df, "Overall", _store=True)
+print("Overall (Total + MTD-1 + Best Month vs Achieved) ready")
+
 # ====== 6. FORMAT ======
 TEAL={"red":0.18,"green":0.55,"blue":0.56}; WHITE={"red":1,"green":1,"blue":1}
 GRID={"red":0.3,"green":0.3,"blue":0.3}
@@ -281,29 +384,31 @@ def color_col(sid, colors, col_idx, data_start=2):
         req.append({"repeatCell":{"range":{"sheetId":sid,"startRowIndex":data_start+i,"endRowIndex":data_start+i+1,"startColumnIndex":col_idx,"endColumnIndex":col_idx+1},"cell":{"userEnteredFormat":{"textFormat":{"bold":True,"foregroundColor":fg}}},"fields":"userEnteredFormat.textFormat"}})
     return req
 
-# ====== 7. OVERALL ======
-ws1=replace_ws("Overall_Summary", overall_df); sid1=ws1._properties["sheetId"]
-nc1=len(overall_df.columns); nr1=len(overall_df)
-req=base_format(sid1,nc1,nr1,"Overall Performance — MTD-1 vs Last Month + Target + Revenue")
-cols1=list(overall_df.columns)
-req+=color_col(sid1, ov_vs, cols1.index("vs Last Month"))
-req+=color_col(sid1, ov_tgt, cols1.index("% Achieved"))
+# ====== 7. OVERALL (simple: Category | Target | Achieved) ======
+ws1=replace_ws("Overall_Summary", overall_simple); sid1=ws1._properties["sheetId"]
+nc1=len(overall_simple.columns); nr1=len(overall_simple)
+req=base_format(sid1,nc1,nr1,f"Overall — Target vs Achieved (MTD: {mtd_str})")
+# Achieved column ko green/red (target poora hua ya nahi)
+req+=color_col(sid1, ov_simple_c, list(overall_simple.columns).index("Achieved"))
 sheet.batch_update({"requests":req})
-print("Overall_Summary done")
+print("Overall_Summary done (Target vs Achieved)")
 
 # ====== 8. DURATION HELPERS ======
 npd_all = plan[plan["plan_type"] == "New Plan"].copy()
 npd_all["total_service_months"] = pd.to_numeric(npd_all["total_service_months"], errors="coerce")
+# 30 din se kam (0 ya NaN) wale plan ko bhi 1 month maano — koi plan chhute nahi
+npd_all["total_service_months"] = npd_all["total_service_months"].fillna(1)
+npd_all.loc[npd_all["total_service_months"] < 1, "total_service_months"] = 1
 
 # label banane ka helper (12 -> "1 Year", baaki "N Month")
 def _dur_label(m):
     if m == 12: return "1 Year"
     return f"{int(m)} Month"
 
-# DYNAMIC buckets: data me jo bhi durations hain unke rows banenge (0 ko chhod ke).
+# DYNAMIC buckets: data me jo bhi durations hain unke rows banenge.
 # preferred order pehle, phir baaki jo bhi mile (numeric order me).
 _PREFERRED = [1, 2, 3, 6, 9, 12]
-_present = sorted(int(m) for m in npd_all["total_service_months"].dropna().unique() if int(m) != 0)
+_present = sorted(int(m) for m in npd_all["total_service_months"].dropna().unique())
 _ordered = [m for m in _PREFERRED if m in _present] + [m for m in _present if m not in _PREFERRED]
 DURATION_BUCKETS = [(m, _dur_label(m)) for m in _ordered]
 print(f"Duration buckets (dynamic): {[lbl for _, lbl in DURATION_BUCKETS]}")
@@ -403,134 +508,508 @@ reqc.append({"autoResizeDimensions":{"dimensions":{"sheetId":ws_c._properties["s
 sheet.batch_update({"requests": reqc})
 print("New_Plan_Duration (combined) tab done")
 
-# # ====== 10. EMAIL ======
-# import smtplib
-# from email.mime.multipart import MIMEMultipart
-# from email.mime.text import MIMEText
-#
-# GMAIL_USER = os.environ.get("GMAIL_USER")
-# GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
-#
-# TO  = [""]
-# CC  = ["neelesh@emoneeds.com"]
-# BCC = ["neelesh@emoneeds.com"]
-#
-# def df_to_html(df, title):
-#     html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
-#     html += '<table style="border-collapse:collapse;font-family:Arial;font-size:13px;">'
-#     html += '<tr>'
-#     for col in df.columns:
-#         html += (f'<th style="background:#028090;color:#ffffff;padding:8px 12px;'
-#                  f'border:2px solid #555555;text-align:center;">{col}</th>')
-#     html += '</tr>'
-#     last_idx = len(df) - 1
-#     for ridx, (_, row) in enumerate(df.iterrows()):
-#         rbg = "background:#e0f5f3;" if ridx == last_idx else ""
-#         html += f'<tr style="{rbg}">'
-#         for col in df.columns:
-#             val = row[col]; color = "#000000"
-#             if "vs" in str(col).lower():
-#                 if "⬆️" in str(val): color = "#1a7f37"
-#                 elif "⬇️" in str(val): color = "#c0392b"
-#             bold = "font-weight:bold;" if ridx == last_idx else ""
-#             html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
-#                      f'text-align:center;color:{color};{bold}">{val}</td>')
-#         html += '</tr>'
-#     html += '</table>'
-#     return html
-#
-# def comb_to_html(df, title):
-#     html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
-#     html += '<table style="border-collapse:collapse;font-family:Arial;font-size:13px;">'
-#     html += '<tr>'
-#     for col in df.columns:
-#         html += (f'<th style="background:#028090;color:#ffffff;padding:8px 12px;'
-#                  f'border:2px solid #555555;text-align:center;">{col}</th>')
-#     html += '</tr>'
-#     for _, row in df.iterrows():
-#         html += '<tr>'
-#         for i, col in enumerate(df.columns):
-#             align="left" if i==0 else "center"
-#             bold="font-weight:bold;" if col=="Total" else ""
-#             html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
-#                      f'text-align:{align};{bold}">{row[col]}</td>')
-#         html += '</tr>'
-#     html += '</table>'
-#     return html
-#
-# _y_str  = yesterday.strftime("%d %b %Y")
-# _m_str  = month_start.strftime("%d %b")
-# _lm_str = f"{lm_start.strftime('%d %b')} – {lm_end.strftime('%d %b %Y')}"
-#
-# legend_html = f'''
-# <table style="border-collapse:collapse;font-family:Arial;font-size:12px;
-#               margin:6px 0 16px;background:#f4fbfa;border:1px solid #cfe8e6;">
-#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Yesterday</b></td>
-#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Single-day performance for {yesterday.strftime('%d %b %Y')}.</td></tr>
-#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">MTD-1</b></td>
-#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Month-to-Date — cumulative from the 1st up to yesterday ({_m_str} – {yesterday.strftime('%d %b')}).</td></tr>
-#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Last Month</b></td>
-#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Same period last month for a like-for-like comparison ({_lm_str}).</td></tr>
-#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">vs Last Month</b></td>
-#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Change in MTD-1 vs same period last month. ⬆️ green = improvement, ⬇️ red = decline.</td></tr>
-#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Amount</b></td>
-#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">MTD-1 revenue for OPDs, New Plan, Renewals, Revivals & Assessments. OPD me 0 ko 1500 maana gaya.</td></tr>
-#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Assessments</b></td>
-#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Assessments sheet se: count = Assessment's No. ka sum, amount = Cost ka sum.</td></tr>
-#   <tr><td style="padding:6px 12px;border-bottom:1px solid #e0eeed;"><b style="color:#07333B;">Target / % Achieved / Pending&nbsp;%</b></td>
-#       <td style="padding:6px 12px;border-bottom:1px solid #e0eeed;">Monthly goal, % achieved as of MTD-1, % remaining.</td></tr>
-#   <tr><td style="padding:6px 12px;"><b style="color:#07333B;">Revenue</b></td>
-#       <td style="padding:6px 12px;">OPD + New Plan + Renewal + Revival + Assessments ka total, target.csv ke Revenue target se compare.</td></tr>
-# </table>
-# '''
-#
-# branch_html = ""
-# for b in branches:
-#     branch_html += df_to_html(branch_dfs[b], f"{b} — Summary ({_m_str} – {yesterday.strftime('%d %b %Y')})")
-#     branch_html += "<br><br>"
-#
-# html_body = f'''
-# <html><body style="font-family:Arial;color:#222;">
-# <p>Dear Tanmay,</p>
-# <p>Please find the <b>Overall Performance Report</b> for
-# <b>{yesterday.strftime('%d %b %Y')}</b> below, with consolidated and branch-wise
-# summaries, amounts, assessments, New Plan duration and revenue progress against target.</p>
-#
-# <p style="margin-bottom:4px;"><b style="color:#07333B;">How to read this report:</b></p>
-# {legend_html}
-#
-# {df_to_html(overall_df, f"Overall Summary ({_m_str} – {yesterday.strftime('%d %b %Y')})")}
-# <br><br>
-# {branch_html}
-#
-# {comb_to_html(comb_mtd, f"New Plan Duration — MTD-1 ({_m_str} – {yesterday.strftime('%d %b')})")}
-#
-# <p style="margin-top:8px;">Favourable movements appear in
-# <span style="color:#1a7f37;"><b>green</b></span>, unfavourable in
-# <span style="color:#c0392b;"><b>red</b></span>. The Revenue row totals OPD, New Plan,
-# Renewal, Revival and Assessment amounts.</p>
-#
-# <p>This report is generated automatically and refreshes every day.</p>
-#
-# <p>Best regards,<br><b>Neelesh</b><br>Data Analyst, Emoneeds</p>
-#
-# <p style="font-family:Arial;font-size:11px;color:#999;border-top:1px solid #eee;
-#           padding-top:8px;margin-top:14px;">
-# This is an automated report. Figures are based on data up to {yesterday.strftime('%d %b %Y')}.</p>
-# </body></html>
-# '''
-#
-# msg = MIMEMultipart("alternative")
-# msg["Subject"] = f"Overall Performance Report — {_y_str}"
-# msg["From"] = GMAIL_USER
-# msg["To"]  = ", ".join(TO)
-# msg["Cc"]  = ", ".join(CC)
-# msg.attach(MIMEText(html_body, "html"))
-#
-# all_recipients = TO + CC + BCC
-# with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-#     server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-#     server.sendmail(GMAIL_USER, all_recipients, msg.as_string())
-#
-# print(f"Email bheji gayi — To: {len(TO)}, CC: {len(CC)}, BCC: {len(BCC)}")
-#
+# ====== 9c. LEAD-SOURCE WISE MTD-1 TABLE (Overall + branch-wise) ======
+# image jaisा: rows = lead sources, cols = New OPD..NO2P%, neeche Total row.
+# Late Renewal chhod diya; Total Renewal = plan_type "Renewal" ka count.
+LEAD_ORDER = ["Practo","GMB","1 MG","Website","Referral","Organic","Google/ IVR Leads",
+              "Whatsapp","Internal Referral","Client Referral","TATA AIA","Primus","Walk-in",
+              "Facebook","Digital Leads","Docgenie","Instagram","Practo-Insta","Team Referral"]
+
+# lead source normalize: PRACTO/Practo Book/Practo Call -> "Practo" (par Practo-Insta alag)
+def _norm_lead(x):
+    s = str(x).strip()
+    if not s or s.lower() in ("none","nan",""):
+        return "Unknown"
+    sl = s.lower()
+    if "practo" in sl and "insta" not in sl:   # Practo, PRACTO, Practo Book, Practo Call
+        return "Practo"
+    if "practo" in sl and "insta" in sl:        # Practo-Insta
+        return "Practo-Insta"
+    return s
+
+def lead_source_table(opd_f, plan_f, d1, d2):
+    """Lead-source wise MTD-1 counts -> DataFrame. Saare LEAD_ORDER dikhao (0 bhi)."""
+    o = opd_f[(opd_f["opd_date"]>=d1)&(opd_f["opd_date"]<=d2)].copy()
+    p = plan_f[(plan_f["enrollment_date"]>=d1)&(plan_f["enrollment_date"]<=d2)].copy()
+    o["_ls"] = o["lead_source"].apply(_norm_lead) if "lead_source" in o.columns else "Unknown"
+    p["_ls"] = p["lead_source"].apply(_norm_lead) if "lead_source" in p.columns else "Unknown"
+
+    # HAMESHA poori LEAD_ORDER list, + koi extra jo data me mila par list me nahi
+    present = set(o["_ls"]) | set(p["_ls"])
+    extra = sorted(present - set(LEAD_ORDER) - {"Unknown"})
+    sources = LEAD_ORDER + extra
+    if "Unknown" in present:
+        sources = sources + ["Unknown"]
+
+    rows = []
+    for ls in sources:
+        oo = o[o["_ls"]==ls]; pp = p[p["_ls"]==ls]
+        new_opd = int((oo["opd_status"]=="NEW OPD").sum())
+        old_opd = int((oo["opd_status"]=="OLD OPD").sum())
+        total_opd = new_opd + old_opd
+        rpp = int((oo["is_suggest_rpp"]=="Yes").sum())
+        new_plan = int((pp["plan_type"]=="New Plan").sum())
+        total_ren = int((pp["plan_type"]=="Renewal").sum())
+        revival = int((pp["plan_type"]=="Revival").sum())
+        no2p = round(new_plan/new_opd*100,1) if new_opd else 0.0
+        rows.append([ls, new_opd, old_opd, total_opd, rpp, new_plan,
+                     total_ren, revival, "", f"{no2p}%"])
+    df = pd.DataFrame(rows, columns=["Lead Source","New OPD","OLD OPD","Total OPD",
+        "Suggest RPP","Plan","Total Renewal","Revival","Assessment","NO2P %"])
+    # Total row
+    if len(df):
+        tot_new = df["New OPD"].sum(); tot_plan = df["Plan"].sum()
+        tot_no2p = round(tot_plan/tot_new*100,1) if tot_new else 0.0
+        total_row = ["Total", df["New OPD"].sum(), df["OLD OPD"].sum(), df["Total OPD"].sum(),
+                     df["Suggest RPP"].sum(), df["Plan"].sum(), df["Total Renewal"].sum(),
+                     df["Revival"].sum(), "", f"{tot_no2p}%"]
+        df.loc[len(df)] = total_row
+    return df
+
+def lead_table_html(df, title):
+    """Lead-source table -> HTML, dark-blue header, purple shading Total OPD & Total Renewal."""
+    PURPLE = "#E6E0F0"   # halka purple
+    NAVY = "#2E5496"
+    shade_cols = {"Total OPD","Total Renewal"}
+    html = f'<h3 style="font-family:Arial;color:#07333B;margin:16px 0 6px;">{title}</h3>'
+    html += '<table style="border-collapse:collapse;font-family:Arial;font-size:12px;">'
+    # header
+    html += '<tr>'
+    for col in df.columns:
+        html += (f'<th style="background:{NAVY};color:#fff;padding:7px 10px;'
+                 f'border:1px solid #666;text-align:center;">{col}</th>')
+    html += '</tr>'
+    last = len(df) - 1
+    for ridx, (_, row) in enumerate(df.iterrows()):
+        is_total = (ridx == last)
+        rbg = "#DCE6F1" if is_total else "#ffffff"
+        wt = "bold" if is_total else "normal"
+        html += '<tr>'
+        for col in df.columns:
+            val = row[col]
+            align = "left" if col == "Lead Source" else "center"
+            bg = rbg
+            if col in shade_cols and not is_total:
+                bg = PURPLE
+            elif col in shade_cols and is_total:
+                bg = "#C9BFE0"
+            fw = "bold" if (col == "Lead Source" or is_total) else wt
+            html += (f'<td style="background:{bg};padding:6px 10px;border:1px solid #666;'
+                     f'text-align:{align};font-weight:{fw};">{val}</td>')
+        html += '</tr>'
+    html += '</table>'
+    return html
+
+# Overall + branch-wise lead-source tables (MTD-1)
+lead_overall = lead_source_table(opd, plan, month_start, yesterday)
+lead_branch = {}
+for b in branches:
+    lead_branch[b] = lead_source_table(opd[opd["hosp_name"]==b], plan[plan["hosp_name"]==b],
+                                       month_start, yesterday)
+print("Lead-Source tables ready (overall + branch-wise)")
+
+# ====== 10. GRAPHS ======
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as _np
+
+# graph ke 8 categories (aapke diye naam)
+GRAPH_CATS = ["New OPD","OLD OPD","Suggest RPP","Plan","Total Renewal","Revival","Assessment"]
+
+def graph_values(opd_f, plan_f, active_f, inactive_f, assess_f, d1, d2):
+    """Ek scope ke values (d1..d2 range) -> categories ki list (Total OPD ke bina)."""
+    r, _amt = count_range(opd_f, plan_f, active_f, inactive_f, assess_f,
+                          d1, d2, pd.Timestamp(month_start))
+    return [
+        r["New OPDs"],
+        r["F/U OPDs"],
+        r["Suggest RPP"],
+        r["New Plan"],
+        r["Renewals"],
+        r["Revivals"],
+        r["Assessments"],
+    ]
+
+_mtd_lbl = f"{month_start.strftime('%d-%b')} to {yesterday.strftime('%d-%b-%Y')}"
+_yday_lbl = yesterday.strftime("%d-%b-%Y")
+
+# professional muted palette
+CLR_GURGAON = "#4C72B0"   # soft corporate blue
+CLR_GK      = "#C44E52"   # muted brick red
+CLR_TITLE   = "#2A3F5F"   # dark slate
+CLR_GRID    = "#D5D9E0"
+CLR_HEADER  = "#3B4A6B"   # table header slate
+CLR_ALT     = "#F4F6FA"   # zebra row
+
+def make_branch_graph(filename, d1, d2, title):
+    """Branch-wise grouped bar graph + neeche clean totals table (professional)."""
+    branch_list = [b for b in ["Gurgaon","GK"] if b in branches] or branches
+    data = {b: graph_values(opd[opd["hosp_name"]==b], plan[plan["hosp_name"]==b],
+                            active[active["hosp_name"]==b], inactive[inactive["hosp_name"]==b],
+                            filter_assess(assess_df, b), d1, d2) for b in branch_list}
+    colors = {"Gurgaon": CLR_GURGAON, "GK": CLR_GK}
+
+    x = _np.arange(len(GRAPH_CATS)); n = len(branch_list); width = 0.36
+
+    # figure: upar graph, neeche table — 2 rows, height ratio se spacing
+    fig, (ax, ax_t) = plt.subplots(
+        2, 1, figsize=(12, 8.6), dpi=150,
+        gridspec_kw={"height_ratios": [2.6, 1], "hspace": 0.55})
+
+    # ---- BARS ----
+    for i, b in enumerate(branch_list):
+        offset = (i - (n-1)/2) * width
+        bars = ax.bar(x + offset, data[b], width, label=b,
+                      color=colors.get(b), edgecolor="white", linewidth=0.8, zorder=3)
+        ax.bar_label(bars, fontsize=9.5, fontweight="bold",
+                     color=CLR_TITLE, padding=4)
+
+    ax.set_title(title, fontsize=16, fontweight="bold", color=CLR_TITLE, pad=18)
+    ax.set_xticks(x)
+    ax.set_xticklabels(GRAPH_CATS, fontsize=10.5, color="#333")
+    ax.tick_params(axis="x", length=0, pad=8)
+    ax.tick_params(axis="y", labelcolor="#666", length=0)
+    ax.set_ylim(0, max(max(v) for v in data.values()) * 1.22 or 1)
+    ax.grid(axis="y", linestyle="-", linewidth=0.7, color=CLR_GRID, zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ["top","right","left"]:
+        ax.spines[spine].set_visible(False)
+    ax.spines["bottom"].set_color(CLR_GRID)
+    leg = ax.legend(loc="upper right", frameon=True, fontsize=11,
+                    edgecolor=CLR_GRID, framealpha=1)
+    leg.get_frame().set_linewidth(0.8)
+
+    # ---- TABLE (neeche, clean) — sirf Category + Total, Total OPD ke bina ----
+    ax_t.axis("off")
+    TABLE_CATS = ["New OPD","OLD OPD","Suggest RPP","Plan","Total Renewal","Revival","Assessment"]
+    col_labels = ["Category", "Total"]
+    cell_text = []
+    for cat in TABLE_CATS:
+        i = GRAPH_CATS.index(cat)
+        total = sum(data[b][i] for b in branch_list)
+        cell_text.append([cat, str(total)])
+
+    tbl = ax_t.table(cellText=cell_text, colLabels=col_labels,
+                     cellLoc="center", loc="center",
+                     colWidths=[0.32, 0.16])
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(10.5)
+    tbl.scale(1, 1.65)
+
+    ncols = len(col_labels)
+    for (rr, cc), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#E2E6ED")
+        cell.set_linewidth(0.8)
+        if rr == 0:   # header
+            cell.set_facecolor(CLR_HEADER)
+            cell.set_text_props(color="white", fontweight="bold")
+            cell.set_height(0.16)
+        else:
+            cell.set_facecolor("#FFFFFF" if rr % 2 else CLR_ALT)   # zebra
+            if cc == 0:   # category name left + bold
+                cell.set_text_props(ha="left", fontweight="bold", color=CLR_TITLE)
+                cell.PAD = 0.04
+            else:         # Total value bold
+                cell.set_text_props(fontweight="bold", color=CLR_TITLE)
+
+    fig.savefig(filename, bbox_inches="tight", facecolor="white", pad_inches=0.3)
+    plt.close(fig)
+    return filename
+
+# MTD branch graph + Yesterday branch graph (dono me neeche clean totals table)
+g_mtd = make_branch_graph("graph_mtd.png", month_start, yesterday,
+                          f"Branch Wise Performance — MTD ({_mtd_lbl})")
+g_yday = make_branch_graph("graph_yday.png", yesterday, yesterday,
+                           f"Branch Wise Performance — Yesterday ({_yday_lbl})")
+print("Graphs banaye (MTD + Yesterday, professional)")
+
+# ---- New Plan Duration graph: MTD + Yesterday ek hi image me (2 subplots) ----
+def make_duration_graph(filename):
+    branch_list = [b for b in ["Gurgaon","GK"] if b in branches] or branches
+    labels = [lbl for _, lbl in DURATION_BUCKETS]
+    colors = {"Gurgaon": CLR_GURGAON, "GK": CLR_GK}
+
+    def _dur_counts(d1, d2):
+        out = {b: [] for b in branch_list}
+        for months, _lbl in DURATION_BUCKETS:
+            for b in branch_list:
+                seg = npd_all[(npd_all["hosp_name"]==b)&
+                              (npd_all["enrollment_date"]>=d1)&(npd_all["enrollment_date"]<=d2)&
+                              (npd_all["total_service_months"]==months)]
+                out[b].append(len(seg))
+        return out
+
+    d_mtd  = _dur_counts(month_start, yesterday)
+    d_yday = _dur_counts(yesterday, yesterday)
+
+    x = _np.arange(len(labels)); n = len(branch_list); width = 0.36
+    fig, (axm, axy) = plt.subplots(2, 1, figsize=(11, 9), dpi=150,
+                                   gridspec_kw={"hspace": 0.45})
+
+    def _draw(ax, data, title):
+        for i, b in enumerate(branch_list):
+            off = (i - (n-1)/2) * width
+            bars = ax.bar(x + off, data[b], width, label=b,
+                          color=colors.get(b), edgecolor="white", linewidth=0.8, zorder=3)
+            ax.bar_label(bars, fontsize=9, fontweight="bold", color=CLR_TITLE, padding=3)
+        ax.set_title(title, fontsize=14, fontweight="bold", color=CLR_TITLE, pad=12)
+        ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=10, color="#333")
+        ax.tick_params(axis="x", length=0, pad=6); ax.tick_params(axis="y", labelcolor="#666", length=0)
+        _mx = max([max(v) for v in data.values()] + [1])
+        ax.set_ylim(0, _mx * 1.25)
+        ax.grid(axis="y", linestyle="-", linewidth=0.7, color=CLR_GRID, zorder=0); ax.set_axisbelow(True)
+        for s in ["top","right","left"]: ax.spines[s].set_visible(False)
+        ax.spines["bottom"].set_color(CLR_GRID)
+        ax.legend(loc="upper right", frameon=True, fontsize=10, edgecolor=CLR_GRID, framealpha=1)
+
+    _draw(axm, d_mtd,  f"New Plan Duration — MTD ({_mtd_lbl})")
+    _draw(axy, d_yday, f"New Plan Duration — Yesterday ({_yday_lbl})")
+    fig.savefig(filename, bbox_inches="tight", facecolor="white", pad_inches=0.3)
+    plt.close(fig)
+    return filename
+
+g_dur = make_duration_graph("graph_duration.png")
+print("New Plan Duration graph banaya (MTD + Yesterday)")
+
+# ---- Active / Inactive branch-wise + Total cards (ek image) ----
+def make_active_inactive_graph(filename):
+    branch_list = [b for b in ["Gurgaon","GK"] if b in branches] or branches
+    # har branch ka active + inactive (MTD-1)
+    act = {}; inact = {}
+    for b in branch_list:
+        rr, _a = count_range(opd[opd["hosp_name"]==b], plan[plan["hosp_name"]==b],
+                             active[active["hosp_name"]==b], inactive[inactive["hosp_name"]==b],
+                             filter_assess(assess_df, b), month_start, yesterday,
+                             pd.Timestamp(month_start))
+        act[b] = rr["Active"]; inact[b] = rr["Inactive"]
+    tot_act = sum(act.values()); tot_inact = sum(inact.values())
+
+    fig = plt.figure(figsize=(11, 5.5), dpi=150)
+    # left: grouped bars (branch-wise active/inactive), right: 2 cards
+    ax = fig.add_axes([0.07, 0.12, 0.58, 0.76])
+    x = _np.arange(len(branch_list)); width = 0.36
+    b1 = ax.bar(x - width/2, [act[b] for b in branch_list], width, label="Active",
+                color="#55A868", edgecolor="white", zorder=3)
+    b2 = ax.bar(x + width/2, [inact[b] for b in branch_list], width, label="Inactive",
+                color="#C44E52", edgecolor="white", zorder=3)
+    ax.bar_label(b1, fontsize=10, fontweight="bold", color=CLR_TITLE, padding=3)
+    ax.bar_label(b2, fontsize=10, fontweight="bold", color=CLR_TITLE, padding=3)
+    ax.set_title(f"Active vs Inactive — Branch Wise (MTD: {_mtd_lbl})",
+                 fontsize=14, fontweight="bold", color=CLR_TITLE, pad=14)
+    ax.set_xticks(x); ax.set_xticklabels(branch_list, fontsize=11, color="#333")
+    ax.tick_params(axis="both", length=0); ax.tick_params(axis="y", labelcolor="#666")
+    _mx = max([act[b] for b in branch_list] + [inact[b] for b in branch_list] + [1])
+    ax.set_ylim(0, _mx*1.25)
+    ax.grid(axis="y", linestyle="-", linewidth=0.7, color=CLR_GRID, zorder=0); ax.set_axisbelow(True)
+    for s in ["top","right","left"]: ax.spines[s].set_visible(False)
+    ax.spines["bottom"].set_color(CLR_GRID)
+    ax.legend(loc="upper right", frameon=True, fontsize=10, edgecolor=CLR_GRID, framealpha=1)
+
+    # right side: 2 cards (Total Active / Total Inactive)
+    def _card(x0, y0, w, h, value, label, color):
+        cax = fig.add_axes([x0, y0, w, h]); cax.axis("off")
+        cax.add_patch(plt.Rectangle((0,0),1,1, transform=cax.transAxes,
+                      facecolor=color, edgecolor="none", zorder=1))
+        cax.text(0.5, 0.62, str(value), ha="center", va="center", transform=cax.transAxes,
+                 fontsize=34, fontweight="bold", color="white", zorder=2)
+        cax.text(0.5, 0.22, label, ha="center", va="center", transform=cax.transAxes,
+                 fontsize=12, fontweight="bold", color="white", zorder=2)
+    _card(0.70, 0.52, 0.26, 0.36, tot_act,   "Total Active",   "#3E7C46")
+    _card(0.70, 0.12, 0.26, 0.36, tot_inact, "Total Inactive", "#A83A3E")
+
+    fig.savefig(filename, bbox_inches="tight", facecolor="white", pad_inches=0.3)
+    plt.close(fig)
+    return filename
+
+g_actinact = make_active_inactive_graph("graph_actinact.png")
+print("Active/Inactive graph banaya (branch-wise + total cards)")
+
+# ---- Benchmark graph: Achieved vs MTD-1 Target vs Best Month (Overall) ----
+def make_attainment_graph(filename, best_dict, best_month_dict, title):
+    """Horizontal bars: Achieved vs Target(best). Target bar pe 'number (Mon-yy)', group me Attainment %.
+       Active/Inactive/Suggest RPP hata ke."""
+    _skip = {"Active","Inactive","Suggest RPP"}
+    cats = [c for c in CATEGORIES if c not in PCT_ROWS and c not in _skip]
+    ach  = [int(OV_ACHIEVED.get(c, 0)) for c in cats]
+    best = [int(best_dict.get(c, 0)) for c in cats]
+    bmon = [best_month_dict.get(c, "") for c in cats]
+
+    y = _np.arange(len(cats)); height = 0.38
+    fig, ax = plt.subplots(figsize=(11, max(4, len(cats)*0.85)), dpi=150)
+    bt = ax.barh(y + height/2, best, height, label="Target",
+                 color="#C9CCD2", edgecolor="white", zorder=3)
+    ba = ax.barh(y - height/2, ach,  height, label="Achieved",
+                 color="#2e6fdb", edgecolor="white", zorder=3)
+    # target bar pe: number (best-month naam)
+    for i, rect in enumerate(bt):
+        _lbl = f"{best[i]} ({bmon[i]})" if bmon[i] else f"{best[i]}"
+        ax.text(rect.get_width(), rect.get_y() + rect.get_height()/2, f" {_lbl}",
+                va="center", ha="left", fontsize=8.5, fontweight="bold", color="#555")
+    ax.bar_label(ba, fontsize=9, fontweight="bold", color=CLR_TITLE, padding=3)
+
+    _mx = max(ach + best + [1])
+    for i, c in enumerate(cats):
+        pct = round(ach[i] / best[i] * 100) if best[i] else 0
+        ax.text(_mx * 1.22, y[i], f"{pct}%", va="center", ha="right",
+                fontsize=10, fontweight="bold",
+                color=("#1a7f37" if pct >= 100 else "#c0392b"))
+
+    ax.set_yticks(y); ax.set_yticklabels(cats, fontsize=11, color="#333")
+    ax.invert_yaxis()
+    ax.set_xlim(0, _mx * 1.30)
+    ax.tick_params(axis="both", length=0); ax.tick_params(axis="x", labelcolor="#666")
+    ax.set_title(title, fontsize=14.5, fontweight="bold", color=CLR_TITLE, pad=16)
+    ax.grid(axis="x", linestyle="-", linewidth=0.7, color=CLR_GRID, zorder=0); ax.set_axisbelow(True)
+    for s in ["top","right","left"]: ax.spines[s].set_visible(False)
+    ax.spines["bottom"].set_color(CLR_GRID)
+    ax.text(_mx * 1.22, -0.7, "Attainment", va="center", ha="right",
+            fontsize=9.5, fontweight="bold", color="#555")
+    ax.legend(loc="lower right", frameon=True, fontsize=10, edgecolor=CLR_GRID, framealpha=1)
+    fig.savefig(filename, bbox_inches="tight", facecolor="white", pad_inches=0.3)
+    plt.close(fig)
+    return filename
+
+# date range label (1 Aug 2026 – 12 Aug 2026) — Windows-safe
+try:
+    _range_lbl = f"{month_start.strftime('%-d %b %Y')} – {yesterday.strftime('%-d %b %Y')}"
+except ValueError:
+    # Windows me %-d nahi chalta -> %d (leading zero) use karo
+    _range_lbl = f"{month_start.strftime('%d %b %Y')} – {yesterday.strftime('%d %b %Y')}"
+
+# Graph 1: MTD same-period best | Graph 2: full-month best
+g_bench_mtd = make_attainment_graph("graph_bench_mtd.png", OV_BEST_SP, OV_BEST_SP_M,
+                f"Achieved vs Target — {_range_lbl}")
+g_bench_full = make_attainment_graph("graph_bench_full.png", OV_BEST_FM, OV_BEST_FM_M,
+                f"Achieved vs Target (Full Month Best) — {month_start.strftime('%b %Y')}")
+print("Benchmark graphs banaye (MTD-1 + Full Month, Achieved vs Target)")
+
+# ====== 11. EMAIL (tables + dono graph embed) ======
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+
+GMAIL_USER = os.environ.get("GMAIL_USER")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
+
+TO  = ["tanmay@emoneeds.com"]
+CC  = ["neelesh@emoneeds.com"]
+BCC = ["neeleshdwivedirgpv@gmail.com"]
+
+def df_to_html(df, title):
+    html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
+    html += '<table style="border-collapse:collapse;font-family:Arial;font-size:13px;">'
+    html += '<tr>'
+    for col in df.columns:
+        html += (f'<th style="background:#028090;color:#ffffff;padding:8px 12px;'
+                 f'border:2px solid #555555;text-align:center;">{col}</th>')
+    html += '</tr>'
+    last_idx = len(df) - 1
+    for ridx, (_, row) in enumerate(df.iterrows()):
+        rbg = "background:#e0f5f3;" if ridx == last_idx else ""
+        html += f'<tr style="{rbg}">'
+        for col in df.columns:
+            val = row[col]; color = "#000000"
+            if "vs" in str(col).lower():
+                if "⬆️" in str(val): color = "#1a7f37"
+                elif "⬇️" in str(val): color = "#c0392b"
+            bold = "font-weight:bold;" if ridx == last_idx else ""
+            html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
+                     f'text-align:center;color:{color};{bold}">{val}</td>')
+        html += '</tr>'
+    html += '</table>'
+    return html
+
+def comb_to_html(df, title):
+    html = f'<h3 style="font-family:Arial;color:#07333B;margin:14px 0 6px;">{title}</h3>'
+    html += '<table style="border-collapse:collapse;font-family:Arial;font-size:13px;">'
+    html += '<tr>'
+    for col in df.columns:
+        html += (f'<th style="background:#028090;color:#ffffff;padding:8px 12px;'
+                 f'border:2px solid #555555;text-align:center;">{col}</th>')
+    html += '</tr>'
+    for _, row in df.iterrows():
+        html += '<tr>'
+        for i, col in enumerate(df.columns):
+            align="left" if i==0 else "center"
+            bold="font-weight:bold;" if col=="Total" else ""
+            html += (f'<td style="padding:7px 12px;border:2px solid #555555;'
+                     f'text-align:{align};{bold}">{row[col]}</td>')
+        html += '</tr>'
+    html += '</table>'
+    return html
+
+_y_str  = yesterday.strftime("%d %b %Y")
+_m_str  = month_start.strftime("%d %b")
+_lm_str = f"{lm_start.strftime('%d %b')} – {lm_end.strftime('%d %b %Y')}"
+
+html_body = f'''
+<html><body style="font-family:Arial;color:#222;">
+<p>Dear Tanmay,</p>
+<p>Please find the <b>Overall Performance Report</b> for
+<b>{yesterday.strftime('%d %b %Y')}</b> below, with branch-wise graphs
+(MTD and Yesterday), the Target vs Achieved summary, and New Plan duration.</p>
+
+<h3 style="font-family:Arial;color:#07333B;margin:18px 0 6px;">Branch Wise Performance — MTD</h3>
+<img src="cid:graph_mtd" style="width:100%;max-width:760px;border:1px solid #ddd;"/>
+<br><br>
+<h3 style="font-family:Arial;color:#07333B;margin:18px 0 6px;">Branch Wise Performance — Yesterday</h3>
+<img src="cid:graph_yday" style="width:100%;max-width:760px;border:1px solid #ddd;"/>
+<br><br>
+
+<h3 style="font-family:Arial;color:#07333B;margin:18px 0 6px;">Achieved vs Best Month — MTD (same period)</h3>
+<img src="cid:graph_bench_mtd" style="width:100%;max-width:720px;border:1px solid #ddd;"/>
+<br><br>
+
+<h3 style="font-family:Arial;color:#07333B;margin:18px 0 6px;">Achieved vs Best Month — Full Month</h3>
+<img src="cid:graph_bench_full" style="width:100%;max-width:720px;border:1px solid #ddd;"/>
+<br><br>
+
+<h3 style="font-family:Arial;color:#07333B;margin:18px 0 6px;">New Plan Duration (MTD &amp; Yesterday)</h3>
+<img src="cid:graph_duration" style="width:100%;max-width:720px;border:1px solid #ddd;"/>
+<br><br>
+
+<h3 style="font-family:Arial;color:#07333B;margin:18px 0 6px;">Active &amp; Inactive — Branch Wise</h3>
+<img src="cid:graph_actinact" style="width:100%;max-width:760px;border:1px solid #ddd;"/>
+<br><br>
+
+{lead_table_html(lead_overall, "Lead-Source Wise MTD-1 Report — Overall")}
+<br><br>
+{"".join(lead_table_html(lead_branch[b], f"Lead-Source Wise MTD-1 Report — {b}") + "<br><br>" for b in branches)}
+
+<p style="margin-top:12px;">This report is generated automatically and refreshes every day.</p>
+
+<p>Best regards,<br><b>Neelesh</b><br>Data Analyst, Emoneeds</p>
+
+<p style="font-family:Arial;font-size:11px;color:#999;border-top:1px solid #eee;
+          padding-top:8px;margin-top:14px;">
+This is an automated report. Figures are based on data up to {yesterday.strftime('%d %b %Y')}.</p>
+</body></html>
+'''
+
+# email: 'related' (inline images) ke andar 'alternative' (html)
+msg = MIMEMultipart("related")
+msg["Subject"] = f"Overall Performance Report — {_y_str}"
+msg["From"] = GMAIL_USER
+msg["To"]  = ", ".join(TO)
+msg["Cc"]  = ", ".join(CC)
+
+_alt = MIMEMultipart("alternative")
+_alt.attach(MIMEText(html_body, "html"))
+msg.attach(_alt)
+
+# dono graph inline attach (cid se match)
+for _cid, _path in [("graph_mtd", g_mtd), ("graph_yday", g_yday), ("graph_bench_mtd", g_bench_mtd), ("graph_bench_full", g_bench_full), ("graph_duration", g_dur), ("graph_actinact", g_actinact)]:
+    with open(_path, "rb") as _f:
+        _img = MIMEImage(_f.read())
+        _img.add_header("Content-ID", f"<{_cid}>")
+        _img.add_header("Content-Disposition", "inline", filename=f"{_cid}.png")
+        msg.attach(_img)
+
+all_recipients = TO + CC + BCC
+with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+    server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+    server.sendmail(GMAIL_USER, all_recipients, msg.as_string())
+
+print(f"Email bheji gayi — To: {len(TO)}, CC: {len(CC)}, BCC: {len(BCC)}")
