@@ -1,29 +1,28 @@
 name: Overall Performance Report
-
 on:
   schedule:
-    - cron: "37 4 * * *"   # 10:00 AM IST रोज
+    # 02:15 UTC = 07:45 AM IST (buffer rakha hai, Actions cron late chalta hai -> ~8 AM tak chal jayega)
+    - cron: "45 2 * * *"
   workflow_dispatch:
-
+concurrency:
+  group: overall-performance-report
+  cancel-in-progress: false
 jobs:
   run-report:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
+          cache: pip
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Run Overall Performance Report (auto-retry on failure)
         uses: nick-fields/retry@v3
         env:
