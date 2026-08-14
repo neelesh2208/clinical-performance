@@ -1,28 +1,30 @@
 name: Clinical Report to Google Sheets
-
 on:
   schedule:
-    - cron: "42 4 * * *"   # 10:00 AM IST
+    # 02:15 UTC = 07:45 AM IST (buffer rakha hai, Actions cron late chalta hai -> ~8 AM tak chal jayega)
+    - cron: "15 2 * * *"
   workflow_dispatch:
-
+concurrency:
+  group: clinical-report
+  cancel-in-progress: false
 jobs:
   run-report:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
+          cache: pip
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Run clinical report
+      - name: Run clinical report (auto-retry on failure)
+        uses: nick-fields/retry@v3
         env:
           DB_HOST: ${{ secrets.DB_HOST }}
           DB_NAME: ${{ secrets.DB_NAME }}
@@ -32,4 +34,8 @@ jobs:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-        run: python clinical_report.py
+        with:
+          timeout_minutes: 8
+          max_attempts: 5
+          retry_wait_seconds: 120
+          command: python clinical_report.py
