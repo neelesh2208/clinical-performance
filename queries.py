@@ -11,11 +11,138 @@ month_ref AS (
         month_start,
         LEAST(
             (month_start + INTERVAL '1 month - 1 day')::date,
-            CURRENT_DATE - 1
-        ) AS ref_date
+            CURRENT_DATE
+        ) AS ref_date,
+        (month_start = date_trunc('month', CURRENT_DATE)::date) AS is_current_month
     FROM months
 ),
 diagnosis_data AS (
+    SELECT DISTINCT ON (patient_id)
+        patient_id,
+        diagnosis_name,
+        primary_diagnosis
+    FROM public.patient_provision_diagnosis_treatment
+    ORDER BY patient_id, date_updated DESC NULLS LAST
+),
+latest_assignment AS (
+    SELECT DISTINCT ON (patient_rpp_id)
+        patient_rpp_id,
+        status
+    FROM public.patient_rpp_assignment
+    ORDER BY patient_rpp_id, status
+),
+plan_history AS (
+    SELECT
+        patient_rpp_id,
+        ROW_NUMBER() OVER (
+            PARTITION BY patient_ref_id
+            ORDER BY enrollment_date::date, patient_rpp_id
+        ) AS months_with_us
+    FROM public.patient_rpp_registration
+),
+patient_records AS (
+    SELECT
+        pr.patient_name,
+        prpp.hosp_name,
+        prpp.lead_source,
+        prpp.patient_ref_id,
+        prpp.patient_rpp_id,
+        prpp.amount,
+        prpp.assigned_to_name,
+        prpp.mobile_number,
+        prpp.renewalstatus,
+        prpp.enrollment_date::date AS enrollment_date,
+        prpp.due_date::date        AS due_date,
+        prpp.hold_by_name,
+        prpp.hold_date,
+        la.status,
+        pr.age,
+        pr.gender_name,
+        pr.family_type_name,
+        pr.socio_economic_status_name,
+        pr.marital_status_name,
+        pr.occupation,
+        pr.edu_name,
+        prpp.psychiatrist_name,
+        prpp.psychologist_name,
+        pr.state_id,
+        pr.district_id,
+        prpp.package_name,
+        prpp.package_price,
+        'Regular' AS patient_type,
+        COALESCE(
+            dd.primary_diagnosis,
+            (SELECT string_agg(trim(both E' \n\t\r' from elem), ', ')
+             FROM jsonb_array_elements_text(dd.diagnosis_name) AS elem)
+        ) AS primary_diagnosis,
+        ph.months_with_us,
+        EXISTS (
+            SELECT 1
+            FROM public.patient_rpp_assignment pra
+            WHERE pra.patient_rpp_id = prpp.patient_rpp_id
+              AND pra.status <> 'Expired'
+        ) AS has_live_assignment
+    FROM public.patient_rpp_registration prpp
+    INNER JOIN public.patient_registration pr
+        ON prpp.patient_ref_id = pr.patient_ref_id
+    LEFT JOIN latest_assignment la
+        ON la.patient_rpp_id = prpp.patient_rpp_id
+    LEFT JOIN diagnosis_data dd
+        ON dd.patient_id = pr.patient_id
+    LEFT JOIN plan_history ph
+        ON ph.patient_rpp_id = prpp.patient_rpp_id
+    WHERE prpp.lead_source NOT IN
+          ('CSR', 'Existing Client', 'Offline-Webinar', 'NVF')
+      AND NOT EXISTS (
+            SELECT 1
+            FROM public.patient_csr_terms csr
+            WHERE csr.rppobjectid = prpp._id
+      )
+)
+SELECT
+    m.month_start AS active_date,
+    p.patient_name,
+    p.hosp_name,
+    p.lead_source,
+    p.patient_ref_id,
+    p.patient_rpp_id,
+    p.amount,
+    p.assigned_to_name,
+    p.mobile_number,
+    p.renewalstatus,
+    p.enrollment_date,
+    p.due_date,
+    p.hold_by_name,
+    p.hold_date,
+    p.status,
+    p.age,
+    p.gender_name,
+    p.family_type_name,
+    p.socio_economic_status_name,
+    p.marital_status_name,
+    p.occupation,
+    p.edu_name,
+    p.psychiatrist_name,
+    p.psychologist_name,
+    p.state_id,
+    p.district_id,
+    p.package_name,
+    p.package_price,
+    p.patient_type,
+    p.primary_diagnosis,
+    p.months_with_us
+FROM month_ref m
+INNER JOIN patient_records p
+    ON p.enrollment_date < m.ref_date
+   AND p.due_date       > m.ref_date
+WHERE NOT m.is_current_month
+   OR p.has_live_assignment
+ORDER BY m.month_start, p.patient_name;
+"""
+
+
+INACTIVE_QUERY = """
+WITH diagnosis_data AS (
     SELECT DISTINCT ON (patient_id)
         patient_id,
         diagnosis_name,
@@ -29,9 +156,9 @@ plan_history AS (
         patient_rpp_id,
         COUNT(*) OVER (PARTITION BY patient_id ORDER BY enrollment_date::date) AS months_with_us
     FROM public.patient_rpp_registration
-),
-patient_records AS (
-    SELECT DISTINCT ON (prpp.patient_ref_id, prpp.patient_rpp_id)
+)
+SELECT * FROM (
+    SELECT DISTINCT ON (prpp.patient_ref_id)
         pr.patient_name,
         prpp.hosp_name,
         prpp.lead_source,
@@ -42,6 +169,7 @@ patient_records AS (
         prpp.renewalstatus,
         prpp.enrollment_date::date AS enrollment_date,
         prpp.due_date::date AS due_date,
+        (prpp.due_date::date + 1) AS inactive_date,
         prpp.hold_by_name,
         prpp.hold_date,
         pra.status,
@@ -76,59 +204,6 @@ patient_records AS (
         ON dd.patient_id = pr.patient_id
     LEFT JOIN plan_history ph
         ON ph.patient_rpp_id = prpp.patient_rpp_id
-    WHERE prpp.lead_source NOT IN 
-          ('CSR', 'Existing Client', 'Offline-Webinar', 'NVF')
-      AND csr.rppobjectid IS NULL
-)
-SELECT
-    m.month_start AS active_date,
-    p.*
-FROM month_ref m
-INNER JOIN patient_records p
-    ON p.enrollment_date <= m.ref_date
-   AND p.due_date >= m.ref_date
-ORDER BY m.month_start, p.patient_name;
-"""
-
-
-INACTIVE_QUERY = """
-SELECT * FROM (
-    SELECT DISTINCT ON (prpp.patient_ref_id)
-        pr.patient_name,
-        prpp.hosp_name,
-        prpp.lead_source,
-        prpp.patient_ref_id,
-        prpp.amount,
-        prpp.assigned_to_name,
-        prpp.mobile_number,
-        prpp.renewalstatus,
-        prpp.enrollment_date::date AS enrollment_date,
-        prpp.due_date::date AS due_date,
-        (prpp.due_date::date + 1) AS inactive_date,
-        prpp.hold_by_name,
-        prpp.hold_date,
-        pra.status,
-        pr.age,
-        pr.gender_name,
-        pr.family_type_name,
-        pr.socio_economic_status_name,
-        pr.marital_status_name,
-        pr.occupation,
-        pr.edu_name,
-        prpp.psychiatrist_name,
-        prpp.psychologist_name,
-        pr.state_id,
-        pr.district_id,
-        prpp.package_name,
-        prpp.package_price,
-        'Regular' AS patient_type
-    FROM public.patient_rpp_registration prpp
-    INNER JOIN public.patient_registration pr
-        ON prpp.patient_ref_id = pr.patient_ref_id
-    LEFT JOIN public.patient_rpp_assignment pra
-        ON prpp.patient_rpp_id = pra.patient_rpp_id
-    LEFT JOIN public.patient_csr_terms csr
-        ON prpp._id = csr.rppobjectid
     WHERE prpp.lead_source NOT IN 
           ('CSR', 'Existing Client', 'Offline-Webinar', 'NVF')
       AND csr.rppobjectid IS NULL
