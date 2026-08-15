@@ -6,3 +6,6 @@ oauth2client
 gspread-dataframe
 openpyxl
 python-dotenv
+matplotlib
+
+numpy
