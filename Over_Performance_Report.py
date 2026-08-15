@@ -1013,3 +1013,106 @@ with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
     server.sendmail(GMAIL_USER, all_recipients, msg.as_string())
 
 print(f"Email bheji gayi — To: {len(TO)}, CC: {len(CC)}, BCC: {len(BCC)}")
+
+# ============================================================
+# 12. WHATSAPP — saari images 1-1 personal number pe (Cloud API)
+# .env / GitHub secrets: WA_TOKEN, WA_PHONE_ID, WA_RECIPIENTS
+# WA_PHONE_ID abhi test number ka: 1250365724826358
+# ============================================================
+import requests as _wa_http
+
+WA_TOKEN     = os.environ.get("WA_TOKEN")
+WA_PHONE_ID  = os.environ.get("WA_PHONE_ID")
+WA_RECIPIENTS = [n.strip() for n in os.environ.get("WA_RECIPIENTS", "").split(",") if n.strip()]
+
+# ---- table (DataFrame) ko image banane ka helper ----
+def df_to_png(df, title, filename, shade_cols=None):
+    """DataFrame -> PNG image (dark-blue header, purple shading optional)."""
+    shade_cols = shade_cols or set()
+    nr, ncol = df.shape
+    fig_w = max(7, ncol * 1.5)
+    fig_h = max(2.2, (nr + 2) * 0.42)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=150)
+    ax.axis("off")
+    ax.set_title(title, fontsize=13, fontweight="bold", color="#1a3a6b", pad=12)
+    tbl = ax.table(cellText=df.values.tolist(), colLabels=df.columns.tolist(),
+                   cellLoc="center", loc="center")
+    tbl.auto_set_font_size(False); tbl.set_fontsize(8.5); tbl.scale(1, 1.4)
+    cols = list(df.columns)
+    last = nr - 1
+    for (rr, cc), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#888"); cell.set_linewidth(0.6)
+        if rr == 0:   # header
+            cell.set_facecolor("#2E5496"); cell.set_text_props(color="white", fontweight="bold")
+        else:
+            ridx = rr - 1
+            is_total = (ridx == last)
+            colname = cols[cc]
+            if is_total:
+                cell.set_facecolor("#DCE6F1"); cell.set_text_props(fontweight="bold")
+            elif colname in shade_cols:
+                cell.set_facecolor("#E6E0F0")
+            else:
+                cell.set_facecolor("#ffffff")
+            if cc == 0:
+                cell.set_text_props(ha="left", fontweight="bold")
+    fig.savefig(filename, bbox_inches="tight", facecolor="white", pad_inches=0.25)
+    plt.close(fig)
+    return filename
+
+# ---- WhatsApp upload + send ----
+def wa_upload(filepath):
+    url = f"https://graph.facebook.com/v20.0/{WA_PHONE_ID}/media"
+    with open(filepath, "rb") as f:
+        files = {"file": (os.path.basename(filepath), f, "image/png")}
+        data = {"messaging_product": "whatsapp", "type": "image/png"}
+        headers = {"Authorization": f"Bearer {WA_TOKEN}"}
+        resp = _wa_http.post(url, headers=headers, files=files, data=data, timeout=60)
+    resp.raise_for_status()
+    return resp.json()["id"]
+
+def wa_send_image(to_number, media_id, caption=""):
+    url = f"https://graph.facebook.com/v20.0/{WA_PHONE_ID}/messages"
+    headers = {"Authorization": f"Bearer {WA_TOKEN}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "to": to_number, "type": "image",
+               "image": {"id": media_id, "caption": caption}}
+    resp = _wa_http.post(url, headers=headers, json=payload, timeout=60)
+    if resp.status_code >= 400:
+        print(f"  WA {to_number}: {resp.status_code} {resp.text[:250]}")
+        return False
+    return True
+
+if WA_TOKEN and WA_PHONE_ID and WA_RECIPIENTS:
+    print("WhatsApp: images bhej rahe hain...")
+    # lead-source + overall tables ko image banao
+    _shade = {"Total OPD", "Total Renewal"}
+    img_lead_ov = df_to_png(lead_overall, "Lead-Source Wise MTD-1 — Overall",
+                            "wa_lead_overall.png", _shade)
+    lead_branch_imgs = []
+    for b in branches:
+        _p = df_to_png(lead_branch[b], f"Lead-Source Wise MTD-1 — {b}",
+                       f"wa_lead_{b}.png", _shade)
+        lead_branch_imgs.append((f"Lead-Source — {b}", _p))
+
+    # bhejne ki list: (caption, file) — graphs + table images
+    wa_items = [
+        (f"Branch Wise — MTD ({_mtd_lbl})", g_mtd),
+        (f"Branch Wise — Yesterday ({_yday_lbl})", g_yday),
+        (f"Achieved vs Target — MTD ({_range_lbl})", g_bench_mtd),
+        (f"Achieved vs Target — Full Month", g_bench_full),
+        (f"New Plan Duration (MTD & Yesterday)", g_dur),
+        (f"Active vs Inactive — Branch Wise", g_actinact),
+        ("Lead-Source Wise — Overall", img_lead_ov),
+    ] + lead_branch_imgs
+
+    try:
+        for num in WA_RECIPIENTS:
+            for cap, path in wa_items:
+                mid = wa_upload(path)
+                wa_send_image(num, mid, caption=cap)
+            print(f"  {num} ko {len(wa_items)} images bhej di")
+        print(f"WhatsApp report bheji: {len(WA_RECIPIENTS)} number(s)")
+    except Exception as e:
+        print(f"WhatsApp error: {e}")
+else:
+    print("WhatsApp: WA_TOKEN/WA_PHONE_ID/WA_RECIPIENTS .env me nahi — skip")

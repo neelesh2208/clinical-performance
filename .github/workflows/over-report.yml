@@ -2,7 +2,7 @@ name: Overall Performance Report
 on:
   schedule:
     # 02:15 UTC = 07:45 AM IST (buffer rakha hai, Actions cron late chalta hai -> ~8 AM tak chal jayega)
-    - cron: "45 2 * * *"
+    - cron: "15 2 * * *"
   workflow_dispatch:
 concurrency:
   group: overall-performance-report
@@ -34,6 +34,9 @@ jobs:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          WA_TOKEN: ${{ secrets.WA_TOKEN }}
+          WA_PHONE_ID: ${{ secrets.WA_PHONE_ID }}
+          WA_RECIPIENTS: ${{ secrets.WA_RECIPIENTS }}
         with:
           timeout_minutes: 8
           max_attempts: 5
