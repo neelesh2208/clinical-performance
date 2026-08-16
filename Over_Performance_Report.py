@@ -601,12 +601,17 @@ def lead_table_html(df, title):
     return html
 
 # Overall + branch-wise lead-source tables (MTD-1)
+# Lead-Source Overall — Total OPD descending (Total row neeche rakhna)
 lead_overall = lead_source_table(opd, plan, month_start, yesterday)
-lead_branch = {}
-for b in branches:
-    lead_branch[b] = lead_source_table(opd[opd["hosp_name"]==b], plan[plan["hosp_name"]==b],
-                                       month_start, yesterday)
-print("Lead-Source tables ready (overall + branch-wise)")
+# Total row alag rakho, baaki sort karo
+if len(lead_overall) > 1:
+    _total_row = lead_overall.iloc[[-1]]   # last row = Total
+    _data_rows = lead_overall.iloc[:-1].copy()
+    _data_rows["_sort"] = pd.to_numeric(_data_rows["Total OPD"], errors="coerce").fillna(0)
+    _data_rows = _data_rows.sort_values("_sort", ascending=False).drop(columns=["_sort"])
+    lead_overall = pd.concat([_data_rows, _total_row], ignore_index=True)
+# Branch-wise lead tables band hain (sirf Overall chahiye)
+print("Lead-Source tables ready (overall only, Total OPD descending)")
 
 # ====== 10. GRAPHS ======
 import matplotlib
@@ -720,9 +725,8 @@ def make_branch_graph(filename, d1, d2, title):
 # MTD branch graph + Yesterday branch graph (dono me neeche clean totals table)
 g_mtd = make_branch_graph("graph_mtd.png", month_start, yesterday,
                           f"Branch Wise Performance — MTD ({_mtd_lbl})")
-g_yday = make_branch_graph("graph_yday.png", yesterday, yesterday,
-                           f"Branch Wise Performance — Yesterday ({_yday_lbl})")
-print("Graphs banaye (MTD + Yesterday, professional)")
+# g_yday band hai (Yesterday graph nahi chahiye)
+print("Graphs banaye (MTD branch-wise)")
 
 # ---- New Plan Duration graph: MTD + Yesterday ek hi image me (2 subplots) ----
 def make_duration_graph(filename):
@@ -959,22 +963,15 @@ if WA_TOKEN and WA_PHONE_ID and WA_RECIPIENTS:
     _shade = {"Total OPD", "Total Renewal"}
     img_lead_ov = df_to_png(lead_overall, "Lead-Source Wise MTD-1 — Overall",
                             "wa_lead_overall.png", _shade)
-    lead_branch_imgs = []
-    for b in branches:
-        _p = df_to_png(lead_branch[b], f"Lead-Source Wise MTD-1 — {b}",
-                       f"wa_lead_{b}.png", _shade)
-        lead_branch_imgs.append((f"Lead-Source — {b}", _p))
 
-    # bhejne ki list: (caption, file) — graphs + table images
+    # sirf 5 cheezein WhatsApp pe
     wa_items = [
-        (f"Branch Wise — MTD ({_mtd_lbl})", g_mtd),
-        (f"Branch Wise — Yesterday ({_yday_lbl})", g_yday),
-        (f"Achieved vs Target — MTD ({_range_lbl})", g_bench_mtd),
-        (f"Achieved vs Target — Full Month", g_bench_full),
-        (f"New Plan Duration (MTD & Yesterday)", g_dur),
-        (f"Active vs Inactive — Branch Wise", g_actinact),
-        ("Lead-Source Wise — Overall", img_lead_ov),
-    ] + lead_branch_imgs
+        (f"Branch Wise Performance — MTD ({_mtd_lbl})",          g_mtd),
+        (f"Achieved vs Best Month — MTD ({_range_lbl})",          g_bench_mtd),
+        (f"Achieved vs Best Month — Full Month ({month_start.strftime('%b %Y')})", g_bench_full),
+        (f"Active & Inactive — Branch Wise (MTD: {_mtd_lbl})",   g_actinact),
+        ("Lead-Source Wise MTD-1 — Overall",                      img_lead_ov),
+    ]
 
     try:
         for num in WA_RECIPIENTS:
