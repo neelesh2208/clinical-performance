@@ -11,7 +11,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import set_with_dataframe
 
 from config import DB_CONFIG
-from queries import ACTIVE_QUERY, INACTIVE_QUERY, OPD_QUERY, PLAN_TYPE_QUERY
+from queries import ACTIVE_QUERY, INACTIVE_QUERY, OPD_QUERY, PLAN_TYPE_QUERY, PENDING_QUERY
 
 # ====== 1. DATABASE ======
 engine = create_engine(
@@ -20,7 +20,8 @@ engine = create_engine(
 )
 print("Database Connected")
 QUERIES = {"active": ACTIVE_QUERY, "inactive": INACTIVE_QUERY,
-           "opd": OPD_QUERY, "plan": PLAN_TYPE_QUERY}
+           "opd": OPD_QUERY, "plan": PLAN_TYPE_QUERY,
+           "pending": PENDING_QUERY}
 data = {}
 for name, q in QUERIES.items():
     with engine.connect() as conn:
@@ -613,6 +614,85 @@ if len(lead_overall) > 1:
 # Branch-wise lead tables band hain (sirf Overall chahiye)
 print("Lead-Source tables ready (overall only, Total OPD descending)")
 
+# ====== 9d. PENDING RENEWAL — Psychologist x Pending Category pivot ======
+PENDING_ORDER = ["Yesterday Pending", "7 Days Pending", "15 Days Pending", "30 Days Pending"]
+
+# ek hi psychologist ke alag-alag naam -> ek naam (tech name -> real name)
+PSY_NAME_MAP = {
+    "arushi": "Arushi Goyal",
+    "arushi goyal": "Arushi Goyal",
+    "neena pasrija": "Dr. Neena Pasrija",
+    "dr. neena pasrija": "Dr. Neena Pasrija",
+    "dr neena pasrija": "Dr. Neena Pasrija",
+    "dr. neeraj agarwal": "Dr. Neerja Agarwal",
+    "dr. neerja agarwal": "Dr. Neerja Agarwal",
+    "dr. neerja aggarwal": "Dr. Neerja Agarwal",
+    "dr neerja agarwal": "Dr. Neerja Agarwal",
+    "harshita": "Harshita Diwakar",
+    "harshita diwakar": "Harshita Diwakar",
+    "shristi": "Shristi Vats",
+    "shristi vats": "Shristi Vats",
+}
+# yeh naam pivot me nahi chahiye
+PSY_EXCLUDE = {"test psychologist"}
+
+def _map_psy(x):
+    s = str(x).strip()
+    if s == "" or s.lower() in ("nan", "none"):
+        return "Unassigned"
+    return PSY_NAME_MAP.get(s.lower(), s)
+
+def pending_pivot_table(pending_df):
+    """Psychologist-wise pending renewal count (unique patient_ref_id) x category."""
+    if pending_df is None or len(pending_df) == 0:
+        return pd.DataFrame(columns=["Psychologist"] + PENDING_ORDER + ["Grand Total"])
+
+    p = pending_df.copy()
+    p["pending_category"] = p["pending_category"].astype(str).str.strip()
+    p["psychologist_name"] = p["psychologist_name"].apply(_map_psy)
+    # Test Psychologist jaisा naam hatao
+    p = p[~p["psychologist_name"].str.lower().isin(PSY_EXCLUDE)]
+
+    # sirf 4 categories (Dropout / Not Pending / NA chhod do)
+    p = p[p["pending_category"].isin(PENDING_ORDER)]
+    if p.empty:
+        return pd.DataFrame(columns=["Psychologist"] + PENDING_ORDER + ["Grand Total"])
+
+    # unique patient_ref_id count
+    pv = (p.drop_duplicates(subset=["patient_ref_id", "psychologist_name", "pending_category"])
+            .pivot_table(index="psychologist_name", columns="pending_category",
+                         values="patient_ref_id", aggfunc="nunique", fill_value=0))
+    # saare category columns (jo na ho woh 0)
+    for c in PENDING_ORDER:
+        if c not in pv.columns:
+            pv[c] = 0
+    pv = pv[PENDING_ORDER]
+    pv["Grand Total"] = pv.sum(axis=1)
+    pv = pv.sort_values("Grand Total", ascending=False)
+
+    out = pv.reset_index().rename(columns={"psychologist_name": "Psychologist"})
+    # Grand Total row
+    tot = ["Grand Total"] + [int(out[c].sum()) for c in PENDING_ORDER] + [int(out["Grand Total"].sum())]
+    out.loc[len(out)] = tot
+    # int banao
+    for c in PENDING_ORDER + ["Grand Total"]:
+        out[c] = out[c].astype(int)
+    return out
+
+pending_df = data.get("pending", pd.DataFrame())
+pending_tbl = pending_pivot_table(pending_df)
+print(f"Pending Renewal pivot ready ({len(pending_tbl)} rows)")
+
+# sheet me bhi tab
+if len(pending_tbl):
+    ws_p = replace_ws("Pending_Renewal", pending_tbl)
+    sid_p = ws_p._properties["sheetId"]
+    ncp = len(pending_tbl.columns); nrp = len(pending_tbl)
+    sheet.batch_update({"requests": base_format(
+        sid_p, ncp, nrp,
+        f"Pending Renewal — Psychologist Wise ({yesterday.strftime('%d %b %Y')})")})
+    print("Pending_Renewal tab done")
+
 # ====== 10. GRAPHS ======
 import matplotlib
 matplotlib.use("Agg")
@@ -779,14 +859,20 @@ print("New Plan Duration graph banaya (MTD + Yesterday)")
 # ---- Active / Inactive branch-wise + Total cards (ek image) ----
 def make_active_inactive_graph(filename):
     branch_list = [b for b in ["Gurgaon","GK"] if b in branches] or branches
-    # har branch ka active + inactive (MTD-1)
+    # Active: monthly snapshot (MTD)
+    # Inactive: AAJ tak (kal ki due date wale aaj inactive hote hain)
+    _today = date.today()
     act = {}; inact = {}
     for b in branch_list:
         rr, _a = count_range(opd[opd["hosp_name"]==b], plan[plan["hosp_name"]==b],
                              active[active["hosp_name"]==b], inactive[inactive["hosp_name"]==b],
                              filter_assess(assess_df, b), month_start, yesterday,
                              pd.Timestamp(month_start))
-        act[b] = rr["Active"]; inact[b] = rr["Inactive"]
+        act[b] = rr["Active"]
+        # inactive alag se — month_start se AAJ tak
+        b_inact = inactive[inactive["hosp_name"]==b]
+        inact[b] = len(b_inact[(b_inact["inactive_date"] >= month_start)
+                               & (b_inact["inactive_date"] <= _today)])
     tot_act = sum(act.values()); tot_inact = sum(inact.values())
 
     fig = plt.figure(figsize=(11, 5.5), dpi=150)
@@ -799,8 +885,9 @@ def make_active_inactive_graph(filename):
                 color="#C44E52", edgecolor="white", zorder=3)
     ax.bar_label(b1, fontsize=10, fontweight="bold", color=CLR_TITLE, padding=3)
     ax.bar_label(b2, fontsize=10, fontweight="bold", color=CLR_TITLE, padding=3)
-    ax.set_title(f"Active vs Inactive — Branch Wise (MTD: {_mtd_lbl})",
-                 fontsize=14, fontweight="bold", color=CLR_TITLE, pad=14)
+    ax.set_title(f"Active vs Inactive — Branch Wise\n"
+                 f"(Active MTD: {_mtd_lbl}  |  Inactive till {_today.strftime('%d-%b-%Y')})",
+                 fontsize=13, fontweight="bold", color=CLR_TITLE, pad=14)
     ax.set_xticks(x); ax.set_xticklabels(branch_list, fontsize=11, color="#333")
     ax.tick_params(axis="both", length=0); ax.tick_params(axis="y", labelcolor="#666")
     _mx = max([act[b] for b in branch_list] + [inact[b] for b in branch_list] + [1])
@@ -905,15 +992,24 @@ def df_to_png(df, title, filename, shade_cols=None):
     """DataFrame -> PNG image (dark-blue header, purple shading optional)."""
     shade_cols = shade_cols or set()
     nr, ncol = df.shape
-    fig_w = max(7, ncol * 1.5)
+    cols = list(df.columns)
+
+    # har column ki width content ke hisaab se (longest text)
+    char_w = []
+    for c in cols:
+        longest = max([len(str(c))] + [len(str(v)) for v in df[c].tolist()])
+        char_w.append(longest)
+    total_chars = sum(char_w)
+    col_widths = [w / total_chars for w in char_w]
+
+    fig_w = max(7, total_chars * 0.115)
     fig_h = max(2.2, (nr + 2) * 0.42)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=150)
     ax.axis("off")
     ax.set_title(title, fontsize=13, fontweight="bold", color="#1a3a6b", pad=12)
-    tbl = ax.table(cellText=df.values.tolist(), colLabels=df.columns.tolist(),
-                   cellLoc="center", loc="center")
+    tbl = ax.table(cellText=df.values.tolist(), colLabels=cols,
+                   cellLoc="center", loc="center", colWidths=col_widths)
     tbl.auto_set_font_size(False); tbl.set_fontsize(8.5); tbl.scale(1, 1.4)
-    cols = list(df.columns)
     last = nr - 1
     for (rr, cc), cell in tbl.get_celld().items():
         cell.set_edgecolor("#888"); cell.set_linewidth(0.6)
@@ -931,6 +1027,7 @@ def df_to_png(df, title, filename, shade_cols=None):
                 cell.set_facecolor("#ffffff")
             if cc == 0:
                 cell.set_text_props(ha="left", fontweight="bold")
+                cell.PAD = 0.03
     fig.savefig(filename, bbox_inches="tight", facecolor="white", pad_inches=0.25)
     plt.close(fig)
     return filename
@@ -943,7 +1040,9 @@ def wa_upload(filepath):
         data = {"messaging_product": "whatsapp", "type": "image/png"}
         headers = {"Authorization": f"Bearer {WA_TOKEN}"}
         resp = _wa_http.post(url, headers=headers, files=files, data=data, timeout=60)
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        print(f"WA upload error {resp.status_code}: {resp.text[:500]}")
+        resp.raise_for_status()
     return resp.json()["id"]
 
 def wa_send_image(to_number, media_id, caption=""):
@@ -963,14 +1062,18 @@ if WA_TOKEN and WA_PHONE_ID and WA_RECIPIENTS:
     _shade = {"Total OPD", "Total Renewal"}
     img_lead_ov = df_to_png(lead_overall, "Lead-Source Wise MTD-1 — Overall",
                             "wa_lead_overall.png", _shade)
+    img_pending = df_to_png(pending_tbl,
+                            f"Pending Renewal — Psychologist Wise ({yesterday.strftime('%d %b %Y')})",
+                            "wa_pending.png", {"Grand Total"})
 
-    # sirf 5 cheezein WhatsApp pe
+    # sirf yeh cheezein WhatsApp pe
     wa_items = [
         (f"Branch Wise Performance — MTD ({_mtd_lbl})",          g_mtd),
         (f"Achieved vs Best Month — MTD ({_range_lbl})",          g_bench_mtd),
         (f"Achieved vs Best Month — Full Month ({month_start.strftime('%b %Y')})", g_bench_full),
-        (f"Active & Inactive — Branch Wise (MTD: {_mtd_lbl})",   g_actinact),
+        (f"Active & Inactive — Branch Wise (Inactive till {date.today().strftime('%d-%b-%Y')})", g_actinact),
         ("Lead-Source Wise MTD-1 — Overall",                      img_lead_ov),
+        ("Pending Renewal — Psychologist Wise",                   img_pending),
     ]
 
     try:
