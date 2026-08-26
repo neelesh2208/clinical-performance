@@ -574,7 +574,7 @@ SELECT * FROM (
     WHERE prpp.lead_source NOT IN
           ('CSR', 'Existing Client', 'Offline-Webinar', 'NVF')
       AND csr.rppobjectid IS NULL
-      AND rt.renewalstatus NOT IN ('DROPOUT', 'RENEWED')
+      AND rt.renewalstatus NOT IN ('DROPOUT')
     ORDER BY
         prpp.patient_ref_id,
         prpp.due_date DESC
