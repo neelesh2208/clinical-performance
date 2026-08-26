@@ -76,6 +76,18 @@ patient_records AS (
              FROM jsonb_array_elements_text(dd.diagnosis_name) AS elem)
         ) AS primary_diagnosis,
         ph.months_with_us,
+        (SELECT (svc->>'frequency')::int
+         FROM jsonb_array_elements(prpp.services_details) AS svc
+         WHERE svc->>'service_name' = 'Psychologist Session'
+         LIMIT 1) AS "Psychologist Session",
+        (SELECT (svc->>'frequency')::int
+         FROM jsonb_array_elements(prpp.services_details) AS svc
+         WHERE svc->>'service_name' = 'Psychiatrist Session'
+         LIMIT 1) AS "Psychiatrist Session",
+        (SELECT (svc->>'frequency')::int
+         FROM jsonb_array_elements(prpp.services_details) AS svc
+         WHERE svc->>'service_name' = 'Feedback Calls'
+         LIMIT 1) AS "Feedback Calls",
         EXISTS (
             SELECT 1
             FROM public.patient_rpp_assignment pra
@@ -130,7 +142,10 @@ SELECT
     p.package_price,
     p.patient_type,
     p.primary_diagnosis,
-    p.months_with_us
+    p.months_with_us,
+    p."Psychologist Session",
+    p."Psychiatrist Session",
+    p."Feedback Calls"
 FROM month_ref m
 INNER JOIN patient_records p
     ON p.enrollment_date < m.ref_date
@@ -293,7 +308,10 @@ SELECT
     package_diagnosis_name,
     patient_type,
     induction_done,
-    amount
+    amount,
+    "Psychologist Session",
+    "Psychiatrist Session",
+    "Feedback Calls"
 FROM (
     SELECT
         pr.patient_id,
@@ -318,6 +336,18 @@ FROM (
         pp.months_with_us,
         pr.induction_done,
         pp.amount,
+        (SELECT (svc->>'frequency')::int
+         FROM jsonb_array_elements(pp.services_details) AS svc
+         WHERE svc->>'service_name' = 'Psychologist Session'
+         LIMIT 1) AS "Psychologist Session",
+        (SELECT (svc->>'frequency')::int
+         FROM jsonb_array_elements(pp.services_details) AS svc
+         WHERE svc->>'service_name' = 'Psychiatrist Session'
+         LIMIT 1) AS "Psychiatrist Session",
+        (SELECT (svc->>'frequency')::int
+         FROM jsonb_array_elements(pp.services_details) AS svc
+         WHERE svc->>'service_name' = 'Feedback Calls'
+         LIMIT 1) AS "Feedback Calls",
 
         CASE
             WHEN pp.prev_enrollment IS NULL THEN 'NEW PLAN'
@@ -553,11 +583,23 @@ SELECT * FROM (
         'Regular' AS patient_type,
         COALESCE(
             dd.primary_diagnosis,
-            (SELECT string_agg(trim(both E' \\n\\t\\r' from elem), ', ')
+            (SELECT string_agg(trim(both E' \n\t\r' from elem), ', ')
              FROM jsonb_array_elements_text(dd.diagnosis_name) AS elem)
         ) AS primary_diagnosis,
         ph.months_with_us,
-        rt.renewalstatus
+        rt.renewalstatus,
+        (SELECT (svc->>'frequency')::int
+         FROM jsonb_array_elements(prpp.services_details) AS svc
+         WHERE svc->>'service_name' = 'Psychologist Session'
+         LIMIT 1) AS "Psychologist Session",
+        (SELECT (svc->>'frequency')::int
+         FROM jsonb_array_elements(prpp.services_details) AS svc
+         WHERE svc->>'service_name' = 'Psychiatrist Session'
+         LIMIT 1) AS "Psychiatrist Session",
+        (SELECT (svc->>'frequency')::int
+         FROM jsonb_array_elements(prpp.services_details) AS svc
+         WHERE svc->>'service_name' = 'Feedback Calls'
+         LIMIT 1) AS "Feedback Calls"
     FROM public.patient_rpp_registration prpp
     INNER JOIN public.patient_registration pr
         ON prpp.patient_ref_id = pr.patient_ref_id
