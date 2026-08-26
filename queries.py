@@ -204,10 +204,10 @@ SELECT * FROM (
         ON dd.patient_id = pr.patient_id
     LEFT JOIN plan_history ph
         ON ph.patient_rpp_id = prpp.patient_rpp_id
-    WHERE prpp.lead_source NOT IN 
+    WHERE prpp.lead_source NOT IN
           ('CSR', 'Existing Client', 'Offline-Webinar', 'NVF')
       AND csr.rppobjectid IS NULL
-    ORDER BY 
+    ORDER BY
         prpp.patient_ref_id,
         prpp.due_date DESC
 ) latest
@@ -384,7 +384,8 @@ AND enrollment_date::date >= date_trunc('month', CURRENT_DATE) - INTERVAL '12 mo
 AND enrollment_date::date <= CURRENT_DATE;
 """
 
-OPD_QUERY = """ SELECT *
+OPD_QUERY = """
+SELECT *
 FROM (
     SELECT
         pr.patient_name,
@@ -446,17 +447,18 @@ FROM (
 WHERE rn = 1
 ORDER BY opd_date ASC;
 """
+
 SESSION_QUERY = """
-SELECT 
+SELECT
     dr.slot_date::date,
     dr.task_type,
     dr.is_active,
     dr.booked,
     dr.user_id,
     pr.patient_id,
-    pr.hosp_name,       
-    pr.patient_name,         
-    pr.mobile_number,       
+    pr.hosp_name,
+    pr.patient_name,
+    pr.mobile_number,
     pr.lead_source,
     CASE
         WHEN pr.csr_id IS NULL OR pr.csr_id = 'regular' THEN 'Regular'
@@ -468,48 +470,122 @@ SELECT
 FROM public.doctor_roster dr
 
 LEFT JOIN (
-    SELECT DISTINCT ON (roster_id) roster_id, patient_id  
+    SELECT DISTINCT ON (roster_id) roster_id, patient_id
     FROM public.patient_roster_mapping
-) prm 
+) prm
 ON dr.roster_id = prm.roster_id
 
 LEFT JOIN (
-    SELECT DISTINCT ON (patient_id) 
-        patient_id, 
-        csr_id, 
-        lead_source, 
-        patient_name, 
+    SELECT DISTINCT ON (patient_id)
+        patient_id,
+        csr_id,
+        lead_source,
+        patient_name,
         mobile_number,
-        hosp_name          
+        hosp_name
     FROM public.patient_registration
-) pr 
+) pr
 ON prm.patient_id = pr.patient_id
 
-WHERE dr.booked = 1                          
-  AND dr.is_active = 1                      
-  AND dr.task_type ='RPP'    
+WHERE dr.booked = 1
+  AND dr.is_active = 1
+  AND dr.task_type ='RPP'
   AND dr.slot_date::date BETWEEN '2026-01-01' AND CURRENT_DATE
 
-GROUP BY 
+GROUP BY
     dr.slot_date,
     dr.task_type,
     dr.is_active,
     dr.booked,
     dr.user_id,
-    pr.patient_id, 
-    pr.hosp_name,       
-    pr.patient_name,        
-    pr.mobile_number,        
+    pr.patient_id,
+    pr.hosp_name,
+    pr.patient_name,
+    pr.mobile_number,
     pr.csr_id,
     pr.lead_source
 
-ORDER BY 
+ORDER BY
     dr.slot_date DESC,
     dr.user_id,
     dr.task_type;
-
 """
-PLAN_TYPE_QUERY = """WITH classified AS (
+
+PENDING_QUERY = """
+WITH diagnosis_data AS (
+    SELECT DISTINCT ON (patient_id)
+        patient_id,
+        diagnosis_name,
+        primary_diagnosis,
+        date_updated
+    FROM public.patient_provision_diagnosis_treatment
+    ORDER BY patient_id, date_updated DESC NULLS LAST
+),
+plan_history AS (
+    SELECT
+        patient_rpp_id,
+        COUNT(*) OVER (PARTITION BY patient_id ORDER BY enrollment_date::date) AS months_with_us
+    FROM public.patient_rpp_registration
+)
+SELECT * FROM (
+    SELECT DISTINCT ON (prpp.patient_ref_id)
+        pr.patient_name,
+        prpp.hosp_name,
+        prpp.lead_source,
+        prpp.patient_ref_id,
+        prpp.mobile_number,
+        prpp.enrollment_date::date AS enrollment_date,
+        prpp.due_date::date AS due_date,
+        (prpp.due_date::date - CURRENT_DATE) AS remaining_days,
+        CASE
+            WHEN (prpp.due_date::date - CURRENT_DATE) IS NULL THEN 'NA'
+            WHEN (prpp.due_date::date - CURRENT_DATE) >= 0 THEN 'Not Pending'
+            WHEN (prpp.due_date::date - CURRENT_DATE) = -1 THEN 'Yesterday Pending'
+            WHEN (prpp.due_date::date - CURRENT_DATE) >= -7 THEN '7 Days Pending'
+            WHEN (prpp.due_date::date - CURRENT_DATE) >= -15 THEN '15 Days Pending'
+            WHEN (prpp.due_date::date - CURRENT_DATE) >= -30 THEN '30 Days Pending'
+            ELSE 'Dropout'
+        END AS pending_category,
+        (prpp.due_date::date + 1) AS inactive_date,
+        pra.status,
+        prpp.psychiatrist_name,
+        prpp.psychologist_name,
+        'Regular' AS patient_type,
+        COALESCE(
+            dd.primary_diagnosis,
+            (SELECT string_agg(trim(both E' \\n\\t\\r' from elem), ', ')
+             FROM jsonb_array_elements_text(dd.diagnosis_name) AS elem)
+        ) AS primary_diagnosis,
+        ph.months_with_us,
+        rt.renewalstatus
+    FROM public.patient_rpp_registration prpp
+    INNER JOIN public.patient_registration pr
+        ON prpp.patient_ref_id = pr.patient_ref_id
+    LEFT JOIN public.patient_rpp_assignment pra
+        ON prpp.patient_rpp_id = pra.patient_rpp_id
+    LEFT JOIN public.patient_csr_terms csr
+        ON prpp._id = csr.rppobjectid
+    LEFT JOIN diagnosis_data dd
+        ON dd.patient_id = pr.patient_id
+    LEFT JOIN plan_history ph
+        ON ph.patient_rpp_id = prpp.patient_rpp_id
+    JOIN v1_renewal_trackers rt
+        ON prpp.patient_id = rt.patientid
+    WHERE prpp.lead_source NOT IN
+          ('CSR', 'Existing Client', 'Offline-Webinar', 'NVF')
+      AND csr.rppobjectid IS NULL
+      AND rt.renewalstatus NOT IN ('DROPOUT', 'RENEWED')
+    ORDER BY
+        prpp.patient_ref_id,
+        prpp.due_date DESC
+) latest
+WHERE latest.due_date <= CURRENT_DATE - 1
+ORDER BY latest.due_date ASC
+"""
+
+
+PLAN_TYPE_QUERY = """
+WITH classified AS (
     SELECT
         prpp.*,
         CASE
@@ -571,5 +647,5 @@ WHERE prpp.enrollment_date::date >= date_trunc('month', CURRENT_DATE)::date - IN
         JOIN public.patient_csr_terms csr
             ON csr.appointmentobjectid = pa._id
         WHERE pa.patient_id = pr.patient_id
-  )"""
-
+  )
+"""
