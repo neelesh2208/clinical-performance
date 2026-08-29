@@ -1,8 +1,8 @@
 name: Clinical Report to Google Sheets
 on:
   schedule:
-    # 02:15 UTC = 07:45 AM IST (buffer rakha hai, Actions cron late chalta hai -> ~8 AM tak chal jayega)
-    - cron: "45 3 * * *"
+    # 02:15 UTC = 07:45 AM IST (Actions cron late chalta hai, buffer rakha hai)
+    - cron: "15 2 * * *"
   workflow_dispatch:
 concurrency:
   group: clinical-report
